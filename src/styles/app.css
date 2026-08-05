@@ -369,10 +369,6 @@ html, body, #root {
 }
 
 .pr-meta-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
   min-width: 0;
 }
 
