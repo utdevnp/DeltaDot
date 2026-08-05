@@ -42,8 +42,10 @@ const compactButtonStyle: React.CSSProperties = {
 
 /**
  * Runs the AI code review against the linked Jira task and the PR changes.
- * The three phases are logged vertically in the right-hand panel (which stays
- * visible for future functionality); the result streams into the left panel.
+ * Before a review there is no side panel — only a centered compact button.
+ * When the review is running the phase lines appear one by one in the middle.
+ * Once the review text returns, the left result panel and the right log panel
+ * are shown together.
  */
 export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLoaded }: AIReviewPanelProps) {
   const [aiReview, setAIReview] = useState<string | null>(null);
@@ -132,81 +134,111 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStep(currentStep, 'error');
+      setAIReview(null); // drop any partial stream so the centered error shows, no right panel
       addLog(msg, false);
       setAIError(msg);
     }
     setAILoading(false);
   };
 
+  // Steps that have started — shown one by one while the review is running
+  const startedSteps = steps.filter((s) => s.state !== 'pending');
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
-      <div style={{ display: 'flex', flex: 1, gap: 12, minHeight: 0 }}>
-        {/* Left — Review result (70%) */}
-        <div style={{ flex: 7, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-          {/* Idle state — compact button centered in the box */}
-          {!aiReview && !aiLoading && !aiError && (
+    <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: 12 }}>
+      {/* Left — result / button area */}
+      <div style={{ flex: aiReview ? 7 : 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+        {/* Idle — compact centered button, no panels */}
+        {!aiReview && !aiLoading && !aiError && (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            minHeight: 200,
+          }}>
+            <button
+              onClick={runReview}
+              style={compactButtonStyle}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#4a90e2'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent-blue)'; }}
+            >
+              ▶ Run AI Review
+            </button>
+            <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+              Analyzes PR changes with {cfg.aiProvider === 'none' ? 'AI' : cfg.aiProvider} against the linked Jira task
+            </div>
+          </div>
+        )}
+
+        {/* Running — phase lines appear one by one */}
+        {aiLoading && !aiReview && (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            minHeight: 200,
+          }}>
+            {startedSteps.map((s, i) => (
+              <div key={i} style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 13,
+                color: s.state === 'done' ? 'var(--text-secondary)' : s.state === 'error' ? 'var(--accent-red)' : 'var(--accent-blue)',
+              }}>
+                {s.state === 'done' ? '✓ ' : s.state === 'error' ? '✗ ' : '→ '}{s.label}
+                {s.state === 'active' && <span className="loading-dots" />}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {aiError && !aiLoading && !aiReview && (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
+            <div className="error" style={{ maxWidth: 500 }}>{aiError}</div>
+          </div>
+        )}
+
+        {/* Result — review text (right panel appears next to it) */}
+        {aiReview && (
+          <>
+            {!aiLoading && (
+              <div style={{ flexShrink: 0, textAlign: 'center', marginBottom: 8 }}>
+                <button
+                  onClick={runReview}
+                  disabled={aiLoading}
+                  style={{ ...compactButtonStyle, opacity: aiLoading ? 0.6 : 1, cursor: aiLoading ? 'default' : 'pointer' }}
+                  onMouseEnter={(e) => { if (!aiLoading) e.currentTarget.style.background = '#4a90e2'; }}
+                  onMouseLeave={(e) => { if (!aiLoading) e.currentTarget.style.background = 'var(--accent-blue)'; }}
+                >
+                  ↻ Run Again
+                </button>
+              </div>
+            )}
             <div style={{
               flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 12,
-              minHeight: 200,
-            }}>
-              <button
-                onClick={runReview}
-                style={compactButtonStyle}
-                onMouseEnter={(e) => { e.currentTarget.style.background = '#4a90e2'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent-blue)'; }}
-              >
-                ▶ Run AI Review
-              </button>
-              <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                Analyzes PR changes with {cfg.aiProvider === 'none' ? 'AI' : cfg.aiProvider} against the linked Jira task
-              </div>
-            </div>
-          )}
+              minHeight: 0,
+              overflowY: 'auto',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+              color: 'var(--text-primary)',
+              background: 'var(--bg-secondary)',
+              padding: 12,
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+            }} dangerouslySetInnerHTML={{ __html: renderMarkdown(aiReview) }} />
+          </>
+        )}
+      </div>
 
-          {aiError && !aiLoading && (
-            <div className="error" style={{ flexShrink: 0 }}>{aiError}</div>
-          )}
-
-          {/* Result — shown progressively while streaming, kept after completion */}
-          {aiReview && (
-            <>
-              {!aiLoading && (
-                <div style={{ flexShrink: 0, textAlign: 'center', marginBottom: 8 }}>
-                  <button
-                    onClick={runReview}
-                    disabled={aiLoading}
-                    style={{ ...compactButtonStyle, opacity: aiLoading ? 0.6 : 1, cursor: aiLoading ? 'default' : 'pointer' }}
-                    onMouseEnter={(e) => { if (!aiLoading) e.currentTarget.style.background = '#4a90e2'; }}
-                    onMouseLeave={(e) => { if (!aiLoading) e.currentTarget.style.background = 'var(--accent-blue)'; }}
-                  >
-                    ↻ Run Again
-                  </button>
-                </div>
-              )}
-              <div style={{
-                flex: 1,
-                minHeight: 0,
-                overflowY: 'auto',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                lineHeight: 1.6,
-                whiteSpace: 'pre-wrap',
-                color: 'var(--text-primary)',
-                background: 'var(--bg-secondary)',
-                padding: 12,
-                borderRadius: 6,
-                border: '1px solid var(--border)',
-              }} dangerouslySetInnerHTML={{ __html: renderMarkdown(aiReview) }} />
-            </>
-          )}
-        </div>
-
-        {/* Right — Steps / log panel (30%) — always visible */}
+      {/* Right — log panel, only visible once the review content is rendered */}
+      {aiReview && (
         <div style={{ flex: 3, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
           <div style={{
             flex: 1,
@@ -221,7 +253,7 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
           }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5 }}>Progress</div>
 
-            {/* Vertical phases */}
+            {/* Phases */}
             {steps.map((step, i) => (
               <div key={i} style={{
                 color: step.state === 'done'
@@ -233,7 +265,6 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
                       : 'var(--text-dim)',
               }}>
                 {step.state === 'done' ? '✓ ' : step.state === 'error' ? '✗ ' : step.state === 'active' ? '→ ' : '· '}{step.label}
-                {step.state === 'active' && <span className="loading-dots" />}
               </div>
             ))}
 
@@ -250,7 +281,7 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
             )}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
