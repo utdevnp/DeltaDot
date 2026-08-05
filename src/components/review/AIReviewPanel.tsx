@@ -54,6 +54,12 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
   const [steps, setSteps] = useState<Step[]>(INITIAL_STEPS);
   const [log, setLog] = useState<LogEntry[]>([]);
 
+  // Summary tab state
+  const [panelTab, setPanelTab] = useState<'summary' | 'log'>('summary');
+  const [summary, setSummary] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
   const addLog = (msg: string, ok?: boolean) => {
     setLog((prev) => [...prev, { msg, ok }]);
   };
@@ -62,12 +68,29 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
     setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, state } : s)));
   };
 
+  const submitComment = async () => {
+    if (!summary.trim() || submitting) return;
+    setSubmitting(true);
+    setSubmitResult(null);
+    try {
+      const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
+      if (!remoteInfo) throw new Error('Could not detect remote repository');
+      const url = await window.api.createPRComment(remoteInfo.owner, remoteInfo.repo, prNumber, cfg.provider, cfg.token, summary.trim());
+      setSubmitResult({ ok: true, msg: url || 'Comment posted successfully' });
+    } catch (err) {
+      setSubmitResult({ ok: false, msg: err instanceof Error ? err.message : String(err) });
+    }
+    setSubmitting(false);
+  };
+
   const runReview = async () => {
     setAIReview('');
     setAIError('');
     setLog([]);
     setSteps(INITIAL_STEPS);
     setAILoading(true);
+    setSummary('');
+    setSubmitResult(null);
 
     if (cfg.aiProvider === 'none') {
       setStep(0, 'done');
@@ -130,7 +153,10 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
       addLog('Review complete', true);
       // Always force the final text so the review is never left blank
       const finalText = result || streamedText;
-      if (finalText) setAIReview(finalText);
+      if (finalText) {
+        setAIReview(finalText);
+        setSummary(finalText);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStep(currentStep, 'error');
@@ -233,49 +259,152 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
         )}
       </div>
 
-      {/* Right — log panel, only visible once the review content is rendered */}
+      {/* Right — panel with Summary / Log tabs, only visible once the review content is rendered */}
       {aiReview && (
-        <div style={{ flex: 3, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <div style={{
-            flex: 1,
-            overflowY: 'auto',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12,
-            lineHeight: 1.8,
-            padding: 12,
-            background: 'var(--bg-tertiary)',
-            borderRadius: 6,
-            border: '1px solid var(--border)',
-          }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5 }}>Progress</div>
-
-            {/* Phases */}
-            {steps.map((step, i) => (
-              <div key={i} style={{
-                color: step.state === 'done'
-                  ? 'var(--text-secondary)'
-                  : step.state === 'error'
-                    ? 'var(--accent-red)'
-                    : step.state === 'active'
-                      ? 'var(--accent-blue)'
-                      : 'var(--text-dim)',
-              }}>
-                {step.state === 'done' ? '✓ ' : step.state === 'error' ? '✗ ' : step.state === 'active' ? '→ ' : '· '}{step.label}
-              </div>
-            ))}
-
-            {/* Detail log entries */}
-            {log.length > 0 && (
-              <>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', marginTop: 12, marginBottom: 8, letterSpacing: 0.5 }}>Details</div>
-                {log.map((entry, i) => (
-                  <div key={i} style={{ color: entry.ok === false ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
-                    {entry.ok === true ? '✓ ' : entry.ok === false ? '✗ ' : '→ '}{entry.msg}
-                  </div>
-                ))}
-              </>
-            )}
+        <div style={{ flex: 3, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+          {/* Panel tabs */}
+          <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
+            <div
+              onClick={() => setPanelTab('summary')}
+              style={{
+                padding: '6px 14px',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                color: panelTab === 'summary' ? 'var(--accent-blue)' : 'var(--text-secondary)',
+                borderBottom: panelTab === 'summary' ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                marginBottom: -1,
+              }}
+            >
+              Summary
+            </div>
+            <div
+              onClick={() => setPanelTab('log')}
+              style={{
+                padding: '6px 14px',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                color: panelTab === 'log' ? 'var(--accent-blue)' : 'var(--text-secondary)',
+                borderBottom: panelTab === 'log' ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                marginBottom: -1,
+              }}
+            >
+              Log
+            </div>
           </div>
+
+          {panelTab === 'summary' ? (
+            /* Summary — editable textarea + submit as PR comment */
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
+              <textarea
+                value={summary}
+                onChange={(e) => setSummary(e.target.value)}
+                placeholder="AI review summary..."
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  resize: 'none',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  color: 'var(--text-primary)',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: 10,
+                  outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  onClick={submitComment}
+                  disabled={submitting || !summary.trim() || aiLoading}
+                  style={{
+                    padding: '7px 16px',
+                    borderRadius: 6,
+                    background: 'var(--accent-green)',
+                    border: 'none',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: submitting || !summary.trim() ? 'default' : 'pointer',
+                    fontFamily: 'inherit',
+                    opacity: submitting || !summary.trim() || aiLoading ? 0.6 : 1,
+                    flexShrink: 0,
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => { if (!submitting && summary.trim() && !aiLoading) e.currentTarget.style.background = '#2ea043'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent-green)'; }}
+                >
+                  {submitting ? 'Posting...' : 'Submit as Comment'}
+                </button>
+                {submitResult && (
+                  <div style={{
+                    fontSize: 12,
+                    color: submitResult.ok ? 'var(--accent-green)' : 'var(--accent-red)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
+                  }}>
+                    {submitResult.ok ? '✓ ' : '✗ '}
+                    {submitResult.ok && /^https?:/.test(submitResult.msg) ? (
+                      <a
+                        href={submitResult.msg}
+                        onClick={(e) => { e.preventDefault(); window.api.openUrl(submitResult.msg); }}
+                        style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}
+                      >
+                        View comment
+                      </a>
+                    ) : submitResult.msg}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Log — phases + detail entries */
+            <div style={{
+              flex: 1,
+              overflowY: 'auto',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              lineHeight: 1.8,
+              padding: 12,
+              background: 'var(--bg-tertiary)',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: 0.5 }}>Progress</div>
+
+              {/* Phases */}
+              {steps.map((step, i) => (
+                <div key={i} style={{
+                  color: step.state === 'done'
+                    ? 'var(--text-secondary)'
+                    : step.state === 'error'
+                      ? 'var(--accent-red)'
+                      : step.state === 'active'
+                        ? 'var(--accent-blue)'
+                        : 'var(--text-dim)',
+                }}>
+                  {step.state === 'done' ? '✓ ' : step.state === 'error' ? '✗ ' : step.state === 'active' ? '→ ' : '· '}{step.label}
+                </div>
+              ))}
+
+              {/* Detail log entries */}
+              {log.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', marginTop: 12, marginBottom: 8, letterSpacing: 0.5 }}>Details</div>
+                  {log.map((entry, i) => (
+                    <div key={i} style={{ color: entry.ok === false ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
+                      {entry.ok === true ? '✓ ' : entry.ok === false ? '✗ ' : '→ '}{entry.msg}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

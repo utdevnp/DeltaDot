@@ -249,3 +249,31 @@ function loadGitHubComments(
     };
   });
 }
+
+// ─── Comment creation ──────────────────────────────────────────────────────
+
+/**
+ * Creates a comment on a pull request via the issues comments endpoint.
+ * Returns the created comment's HTML URL when available.
+ */
+export async function createGitHubPRComment(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string,
+  body: string,
+): Promise<string> {
+  const headers = githubHeaders(token);
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`GitHub API error ${res.status}: ${res.statusText} - ${errorBody}`);
+  }
+  const data = await res.json().catch(() => null) as { html_url?: string } | null;
+  return data?.html_url ?? '';
+}

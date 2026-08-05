@@ -183,3 +183,30 @@ function parseBitbucketDiff(diffText: string): Record<string, string> {
   }
   return filePatches;
 }
+
+// ─── Comment creation ──────────────────────────────────────────────────────
+
+/**
+ * Creates a comment on a pull request. Returns the comment URL when available.
+ */
+export async function createBitbucketPRComment(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string,
+  body: string,
+): Promise<string> {
+  const headers = { ...bearerHeaders(token), 'Content-Type': 'application/json' };
+  const url = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests/${prNumber}/comments`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ content: { raw: body } }),
+  });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`Bitbucket API error ${res.status}: ${res.statusText} - ${errorBody}`);
+  }
+  const data = await res.json().catch(() => null) as { links?: { html?: { href?: string } } } | null;
+  return data?.links?.html?.href ?? '';
+}

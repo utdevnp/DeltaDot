@@ -19,6 +19,7 @@ export interface DeltaDotAPI {
   getRemoteOwnerRepo: (repoPath: string) => Promise<{ owner: string; repo: string } | null>;
   fetchPRs: (owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string) => Promise<PR[]>;
   fetchPRDetail: (owner: string, repo: string, prNumber: number, provider: Provider, token: string) => Promise<PRDetail>;
+  createPRComment: (owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => Promise<string>;
   fetchJira: (config: { url: string; email: string; apiToken: string }, issueKey: string) => Promise<JiraIssue>;
   extractJiraKey: (...sources: string[]) => Promise<string | null>;
   fetchAIReview: (aiConfig: any, jiraDescription: string, files: any[]) => Promise<string>;
@@ -62,6 +63,7 @@ const api: DeltaDotAPI = {
   getRemoteOwnerRepo: (repoPath) => ipcRenderer.invoke('get-remote-owner-repo', repoPath),
   fetchPRs: (owner, repo, provider, token, repoName, state) => ipcRenderer.invoke('fetch-prs', owner, repo, provider, token, repoName, state),
   fetchPRDetail: (owner, repo, prNumber, provider, token) => ipcRenderer.invoke('fetch-pr-detail', owner, repo, prNumber, provider, token),
+  createPRComment: (owner, repo, prNumber, provider, token, body) => ipcRenderer.invoke('create-pr-comment', owner, repo, prNumber, provider, token, body),
   fetchJira: (config, issueKey) => ipcRenderer.invoke('fetch-jira', config, issueKey),
   extractJiraKey: (...sources) => ipcRenderer.invoke('extract-jira-key', ...sources),
   fetchAIReview: (aiConfig, jiraDescription, files) => ipcRenderer.invoke('fetch-ai-review', aiConfig, jiraDescription, files),

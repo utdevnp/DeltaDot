@@ -1,1 +1,1 @@
-export { fetchPRsByProvider, fetchPRDetailByProvider } from './pr/index.js';
+export { fetchPRsByProvider, fetchPRDetailByProvider, createPRCommentByProvider } from './pr/index.js';

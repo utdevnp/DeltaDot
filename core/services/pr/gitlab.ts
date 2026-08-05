@@ -160,3 +160,31 @@ function parseDiffPatch(patch: string) {
   }
   return { additions, deletions };
 }
+
+// ─── Comment creation ──────────────────────────────────────────────────────
+
+/**
+ * Creates a note (comment) on a merge request. Returns the note URL when available.
+ */
+export async function createGitLabPRComment(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  token: string,
+  body: string,
+): Promise<string> {
+  const headers = { ...bearerHeaders(token), 'Content-Type': 'application/json' };
+  const projectId = encodeURIComponent(`${owner}/${repo}`);
+  const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests/${prNumber}/notes`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`GitLab API error ${res.status}: ${res.statusText} - ${errorBody}`);
+  }
+  const data = await res.json().catch(() => null) as { web_url?: string } | null;
+  return data?.web_url ?? '';
+}

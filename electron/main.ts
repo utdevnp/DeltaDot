@@ -19,7 +19,7 @@ import {
 } from '../core/config.js';
 import { analyzeRepo, fetchCommitDetail } from '../core/git.js';
 import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/remote.js';
-import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, detectProviderFromRemote } from '../core/pr.js';
+import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
 import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace } from '../core/types.js';
@@ -231,6 +231,10 @@ ipcMain.handle('fetch-prs', async (_event, owner: string, repo: string, provider
 
 ipcMain.handle('fetch-pr-detail', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string) => {
   return fetchPRDetail(owner, repo, prNumber, provider, token);
+});
+
+ipcMain.handle('create-pr-comment', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => {
+  return createPRComment(owner, repo, prNumber, provider, token, body);
 });
 
 ipcMain.handle('fetch-jira', async (_event, config: { url: string; email: string; apiToken: string }, issueKey: string) => {

@@ -1,7 +1,7 @@
 import { run } from './git.js';
 import type { PR, PRDetail, Provider } from './types.js';
 import { timeAgo } from './utils.js';
-import { fetchPRsByProvider, fetchPRDetailByProvider } from './services/api.js';
+import { fetchPRsByProvider, fetchPRDetailByProvider, createPRCommentByProvider } from './services/api.js';
 
 export async function getRemoteOwnerRepo(repoPath: string): Promise<{ owner: string; repo: string } | null> {
   try {
@@ -48,6 +48,17 @@ export async function fetchPRDetail(
   token: string
 ): Promise<PRDetail> {
   return fetchPRDetailByProvider(owner, repo, prNumber, provider, token);
+}
+
+export async function createPRComment(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  provider: Provider,
+  token: string,
+  body: string
+): Promise<string> {
+  return createPRCommentByProvider(owner, repo, prNumber, provider, token, body);
 }
 
 export function detectProviderFromRemote(remoteUrl: string): Provider {

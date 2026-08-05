@@ -1,7 +1,7 @@
 import type { PR, PRDetail, Provider } from '../../types.js';
-import { fetchGitHubPRs, fetchGitHubPRDetail } from './github.js';
-import { fetchGitLabPRs, fetchGitLabPRDetail } from './gitlab.js';
-import { fetchBitbucketPRs, fetchBitbucketPRDetail } from './bitbucket.js';
+import { fetchGitHubPRs, fetchGitHubPRDetail, createGitHubPRComment } from './github.js';
+import { fetchGitLabPRs, fetchGitLabPRDetail, createGitLabPRComment } from './gitlab.js';
+import { fetchBitbucketPRs, fetchBitbucketPRDetail, createBitbucketPRComment } from './bitbucket.js';
 
 export async function fetchPRsByProvider(
   owner: string,
@@ -37,5 +37,24 @@ export async function fetchPRDetailByProvider(
     case 'github':
     default:
       return fetchGitHubPRDetail(owner, repo, prNumber, token);
+  }
+}
+
+export async function createPRCommentByProvider(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  provider: Provider,
+  token: string,
+  body: string
+): Promise<string> {
+  switch (provider) {
+    case 'gitlab':
+      return createGitLabPRComment(owner, repo, prNumber, token, body);
+    case 'bitbucket':
+      return createBitbucketPRComment(owner, repo, prNumber, token, body);
+    case 'github':
+    default:
+      return createGitHubPRComment(owner, repo, prNumber, token, body);
   }
 }
