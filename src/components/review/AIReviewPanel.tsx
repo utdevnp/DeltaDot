@@ -145,7 +145,7 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
   const startedSteps = steps.filter((s) => s.state !== 'pending');
 
   return (
-    <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: 12 }}>
+    <div style={{ display: 'flex', height: '100%', minHeight: 0, gap: 12 }}>
       {/* Left — result / button area */}
       <div style={{ flex: aiReview ? 7 : 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         {/* Idle — compact centered button, no panels */}

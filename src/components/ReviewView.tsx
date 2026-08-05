@@ -91,7 +91,7 @@ export function ReviewView({ cfg, repoPath, prNumber, jiraIssue, loading, error,
             error={prDetailError}
           />
         </div>
-        <div style={tab === 'ai' ? undefined : { display: 'none' }}>
+        <div style={tab === 'ai' ? { height: '100%' } : { display: 'none' }}>
           <AIReviewPanel
             cfg={cfg}
             repoPath={repoPath}
