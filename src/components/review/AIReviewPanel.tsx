@@ -228,10 +228,6 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
               lineHeight: 1.6,
               whiteSpace: 'pre-wrap',
               color: 'var(--text-primary)',
-              background: 'var(--bg-secondary)',
-              padding: 12,
-              borderRadius: 6,
-              border: '1px solid var(--border)',
             }} dangerouslySetInnerHTML={{ __html: renderMarkdown(aiReview) }} />
           </>
         )}
