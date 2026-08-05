@@ -631,10 +631,6 @@ html, body, #root {
   line-height: 1.6;
   color: var(--text-secondary);
   white-space: pre-wrap;
-  background: var(--bg-secondary);
-  padding: 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
 }
 
 .ai-review-text {
