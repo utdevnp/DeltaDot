@@ -21,11 +21,12 @@ export function PRDetailView({ prDetail, loading, error, onBack, onReview }: PRD
 
   return (
     <div className="detail-view">
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button className="back-btn" onClick={onBack}>← Back to PRs</button>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button className="back-btn" onClick={onReview} style={{ color: 'var(--accent-blue)' }}>
           Review
         </button>
+        <div style={{ flex: 1 }} />
+        <button className="back-btn" onClick={onBack}>←</button>
       </div>
 
       <div className="detail-header">

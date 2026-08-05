@@ -3,10 +3,22 @@ import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync, statSync } from 'fs';
 import { readdirSync } from 'fs';
-import type { AppConfig, CacheFile, RepoState } from './types.js';
+import type { AppConfig, CacheFile, RepoState, Workspace } from './types.js';
+
+export function dataDir(): string {
+  return join(homedir(), '.deltadot');
+}
 
 export function globalConfigPath(): string {
-  return join(homedir(), '.deltadot', 'config.json');
+  return join(dataDir(), 'config.json');
+}
+
+export function workspacesFilePath(): string {
+  return join(dataDir(), 'workspaces.json');
+}
+
+export function workspaceConfigPath(workspaceId: string): string {
+  return join(dataDir(), 'workspaces', workspaceId, 'config.json');
 }
 
 export async function loadGlobalConfig(): Promise<Partial<AppConfig>> {
@@ -18,9 +30,51 @@ export async function loadGlobalConfig(): Promise<Partial<AppConfig>> {
 
 export async function saveGlobalConfig(cfg: AppConfig): Promise<void> {
   try {
-    const dir = join(homedir(), '.deltadot');
+    const dir = dataDir();
     await mkdir(dir, { recursive: true });
     await writeFile(globalConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
+  } catch { /* non-fatal */ }
+}
+
+export async function loadWorkspaces(): Promise<Workspace[]> {
+  try {
+    const raw = await readFile(workspacesFilePath(), 'utf8');
+    return JSON.parse(raw) as Workspace[];
+  } catch { return []; }
+}
+
+export async function saveWorkspaces(workspaces: Workspace[]): Promise<void> {
+  try {
+    await mkdir(dataDir(), { recursive: true });
+    await writeFile(workspacesFilePath(), JSON.stringify(workspaces, null, 2), 'utf8');
+  } catch { /* non-fatal */ }
+}
+
+export async function loadWorkspaceConfig(workspaceId: string): Promise<Partial<AppConfig>> {
+  try {
+    const raw = await readFile(workspaceConfigPath(workspaceId), 'utf8');
+    return JSON.parse(raw) as Partial<AppConfig>;
+  } catch { return {}; }
+}
+
+export async function saveWorkspaceConfig(workspaceId: string, config: AppConfig): Promise<void> {
+  try {
+    await mkdir(join(dataDir(), 'workspaces', workspaceId), { recursive: true });
+    await writeFile(workspaceConfigPath(workspaceId), JSON.stringify(config, null, 2), 'utf8');
+  } catch { /* non-fatal */ }
+}
+
+export async function loadActiveWorkspaceId(): Promise<string | null> {
+  try {
+    const raw = await readFile(join(dataDir(), 'active-workspace'), 'utf8');
+    return raw.trim() || null;
+  } catch { return null; }
+}
+
+export async function saveActiveWorkspaceId(id: string): Promise<void> {
+  try {
+    await mkdir(dataDir(), { recursive: true });
+    await writeFile(join(dataDir(), 'active-workspace'), id, 'utf8');
   } catch { /* non-fatal */ }
 }
 
@@ -95,6 +149,7 @@ export function resolveCliConfig(cliOpts: { path?: string; base?: string; releas
     aiModel:      savedCfg.aiModel      ?? 'gpt-4o',
     aiSystemPrompt: savedCfg.aiSystemPrompt ?? 'You are a senior software engineer conducting a code review. Review the provided PR changes against the Jira ticket description. Focus on correctness, performance, edge cases, and code style. Provide concise, actionable feedback.',
     theme:        savedCfg.theme        ?? 'system',
+    defaultView:  savedCfg.defaultView  ?? 'list',
   };
 
   if (!existsSync(finalCfg.workspace)) {

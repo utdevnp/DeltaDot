@@ -10,13 +10,19 @@ import {
   findGitRepos,
   resolveInitialRepos,
   resolveCliConfig,
+  loadWorkspaces,
+  saveWorkspaces,
+  loadWorkspaceConfig,
+  saveWorkspaceConfig,
+  loadActiveWorkspaceId,
+  saveActiveWorkspaceId,
 } from '../core/config.js';
 import { analyzeRepo, fetchCommitDetail } from '../core/git.js';
 import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/remote.js';
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
-import { fetchAIReview } from '../core/services/ai/review.js';
-import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode } from '../core/types.js';
+import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
+import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -87,6 +93,7 @@ ipcMain.handle('initialize', async (_event, cliArgs: Partial<AppConfig>) => {
     aiModel: savedCfg.aiModel ?? 'gpt-4o',
     aiSystemPrompt: savedCfg.aiSystemPrompt ?? '',
     theme: (savedCfg.theme ?? 'system') as ThemeMode,
+    defaultView: (savedCfg.defaultView ?? 'list') as 'list' | 'prs',
   };
   currentConfig = merged;
   return merged;
@@ -166,13 +173,44 @@ ipcMain.handle('sync-one-repo', async (_event, repoPath: string, base: string, r
 });
 
 ipcMain.handle('sync-all-repos', async (_event, repoPaths: string[], base: string, release: string) => {
-  const results: RepoState[] = [];
-  for (const p of repoPaths) {
-    const result = await analyzeRepo(p, base, release);
-    results.push(result);
-  }
-  currentRepos = results;
-  return results;
+  const total = repoPaths.length;
+  const results: (RepoState | null)[] = new Array(total).fill(null);
+
+  let lastProgressSent = 0;
+  const PROGRESS_THROTTLE = 250;
+
+  const sendProgress = (force = false) => {
+    const now = Date.now();
+    if (!force && now - lastProgressSent < PROGRESS_THROTTLE) return;
+    lastProgressSent = now;
+    const done = results.filter((r): r is RepoState => r !== null).length;
+    mainWindow?.webContents.send('sync-progress', { done, total });
+  };
+
+  const promises = repoPaths.map((p, i) =>
+    analyzeRepo(p, base, release)
+      .then((result: RepoState) => {
+        results[i] = result;
+        sendProgress();
+      })
+      .catch((err: unknown) => {
+        results[i] = {
+          name: p.split('/').pop() ?? p,
+          path: p,
+          status: 'error' as const,
+          diffCommits: [], latestCommits: [],
+          latestVersion: null, latestVersionDate: null,
+          currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '',
+          error: err instanceof Error ? err.message : String(err),
+        };
+        sendProgress();
+      })
+  );
+
+  await Promise.allSettled(promises);
+  sendProgress(true);
+  currentRepos = results.filter((r): r is RepoState => r !== null);
+  return currentRepos;
 });
 
 ipcMain.handle('fetch-commit-detail', async (_event, repoPath: string, hash: string) => {
@@ -187,8 +225,8 @@ ipcMain.handle('get-remote-owner-repo', async (_event, repoPath: string) => {
   return getRemoteOwnerRepo(repoPath);
 });
 
-ipcMain.handle('fetch-prs', async (_event, owner: string, repo: string, provider: Provider, token: string, repoName?: string) => {
-  return fetchPRs(owner, repo, provider, token, repoName);
+ipcMain.handle('fetch-prs', async (_event, owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string) => {
+  return fetchPRs(owner, repo, provider, token, repoName, state);
 });
 
 ipcMain.handle('fetch-pr-detail', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string) => {
@@ -205,6 +243,80 @@ ipcMain.handle('extract-jira-key', async (_event, ...sources: string[]) => {
 
 ipcMain.handle('fetch-ai-review', async (_event, aiConfig: any, jiraDescription: string, files: any[]) => {
   return fetchAIReview(aiConfig, jiraDescription, files);
+});
+
+ipcMain.handle('stream-ai-review', async (event, aiConfig: any, jiraDescription: string, files: any[]) => {
+  try {
+    const result = await streamAIReview(aiConfig, jiraDescription, files, (chunk) => {
+      event.sender.send('ai-review-chunk', chunk);
+    });
+    event.sender.send('ai-review-done');
+    return result;
+  } catch (err: any) {
+    event.sender.send('ai-review-error', err?.message ?? String(err));
+    throw err;
+  }
+});
+
+// ─── Workspace Management ──────────────────────────────────────────────────
+
+ipcMain.handle('load-workspaces', async () => {
+  return loadWorkspaces();
+});
+
+ipcMain.handle('add-workspace', async (_event, workspace: Workspace) => {
+  const workspaces = await loadWorkspaces();
+  const existing = workspaces.findIndex((w) => w.id === workspace.id);
+  if (existing !== -1) {
+    // Update existing workspace
+    workspaces[existing] = workspace;
+  } else {
+    workspaces.push(workspace);
+  }
+  await saveWorkspaces(workspaces);
+  await saveActiveWorkspaceId(workspace.id);
+  return workspaces;
+});
+
+ipcMain.handle('remove-workspace', async (_event, id: string) => {
+  let workspaces = await loadWorkspaces();
+  workspaces = workspaces.filter((w) => w.id !== id);
+  await saveWorkspaces(workspaces);
+  return workspaces;
+});
+
+ipcMain.handle('activate-workspace', async (_event, id: string) => {
+  const workspaces = await loadWorkspaces();
+  const ws = workspaces.find((w) => w.id === id);
+  if (!ws) throw new Error('Workspace not found');
+  await saveActiveWorkspaceId(id);
+  // Return config from per-workspace config file, falling back to workspace's stored config
+  const saved = await loadWorkspaceConfig(id);
+  const config: AppConfig = { ...ws.config, ...saved, workspace: ws.path };
+  // Theme is always global — restore it from the global config, never per-workspace
+  const globalCfg = await loadGlobalConfig();
+  if (globalCfg?.theme) config.theme = globalCfg.theme;
+  currentConfig = config;
+  return config;
+});
+
+ipcMain.handle('load-active-workspace-id', async () => {
+  return loadActiveWorkspaceId();
+});
+
+ipcMain.handle('save-workspace-config', async (_event, id: string, config: AppConfig) => {
+  await saveWorkspaceConfig(id, config);
+  const workspaces = await loadWorkspaces();
+  const idx = workspaces.findIndex((w) => w.id === id);
+  if (idx !== -1) {
+    workspaces[idx]!.config = config;
+    await saveWorkspaces(workspaces);
+  }
+  currentConfig = config;
+});
+
+ipcMain.handle('save-workspaces', async (_event, workspaces: Workspace[]) => {
+  await saveWorkspaces(workspaces);
 });
 
 ipcMain.handle('open-url', async (_event, url: string) => {

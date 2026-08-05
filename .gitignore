@@ -5,3 +5,4 @@ release/
 *.log
 .DS_Store
 .deltadot-cache.json
+.reasonix/attachments/

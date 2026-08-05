@@ -5,7 +5,7 @@ export function bearerHeaders(token: string): Record<string, string> {
 export function githubHeaders(token: string): Record<string, string> {
   return {
     Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2026-03-10',
+    'X-GitHub-Api-Version': '2022-11-28',
     ...(token ? { Authorization: token } : {}),
   };
 }

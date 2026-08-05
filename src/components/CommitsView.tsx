@@ -84,8 +84,8 @@ export function CommitsView({ repo, selectedCommit, base, release, onSelectCommi
         gap: 12,
         flexShrink: 0,
       }}>
-        <button className="back-btn" onClick={onBack} style={{ marginBottom: 0 }}>← Back</button>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{repo.name}</span>
+        <button className="back-btn" onClick={onBack} style={{ marginLeft: 'auto' }}>←</button>
         <span style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
           {base} → {release}
         </span>

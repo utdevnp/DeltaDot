@@ -5,11 +5,13 @@ export async function fetchGitLabPRs(
   owner: string,
   repo: string,
   token: string,
-  repoName?: string
+  repoName?: string,
+  state: string = 'opened'
 ): Promise<PR[]> {
   const headers = bearerHeaders(token);
   const projectId = encodeURIComponent(`${owner}/${repo}`);
-  const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests?state=opened&per_page=50`;
+  const apiState = state === 'closed' ? 'closed' : state === 'all' ? 'all' : 'opened';
+  const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests?state=${apiState}&per_page=50`;
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const errorBody = await res.text();

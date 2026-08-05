@@ -621,21 +621,94 @@ html, body, #root {
   color: var(--text-primary);
 }
 
+/* ─── Markdown rendering ─────────────────────────────────────────────────── */
+
+.jira-description h1,
+.jira-description h2,
+.jira-description h3,
+.review-content div[style] h1,
+.review-content div[style] h2,
+.review-content div[style] h3 {
+  margin: 12px 0 6px 0;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+}
+.jira-description h1,
+.review-content div[style] h1 { font-size: 16px; }
+.jira-description h2,
+.review-content div[style] h2 { font-size: 14px; }
+.jira-description h3,
+.review-content div[style] h3 { font-size: 13px; }
+
+.jira-description p,
+.review-content div[style] p {
+  margin: 6px 0;
+  line-height: 1.6;
+}
+.jira-description ul,
+.review-content div[style] ul {
+  margin: 6px 0;
+  padding-left: 20px;
+  list-style: disc;
+}
+.jira-description li,
+.review-content div[style] li {
+  margin: 2px 0;
+  line-height: 1.5;
+}
+.jira-description code,
+.review-content div[style] code {
+  background: rgba(88,166,255,0.12);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--accent-blue);
+}
+.jira-description pre,
+.review-content div[style] pre {
+  background: var(--bg-primary);
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.jira-description pre code,
+.review-content div[style] pre code {
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.jira-description a,
+.review-content div[style] a {
+  color: var(--accent-blue);
+  text-decoration: underline;
+}
+.jira-description hr,
+.review-content div[style] hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
 /* ─── Back Button ────────────────────────────────────────────────────────── */
 
 .back-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 16px;
   cursor: pointer;
-  margin-bottom: 8px;
   transition: all 0.1s;
+  flex-shrink: 0;
 }
 
 .back-btn:hover {

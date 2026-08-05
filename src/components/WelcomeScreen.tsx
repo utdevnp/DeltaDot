@@ -1,12 +1,15 @@
 import React from 'react';
+import type { Workspace } from '../../core/types.js';
 
 interface WelcomeScreenProps {
+  workspaces: Workspace[];
   onSelectWorkspace: () => void;
+  onSwitchWorkspace: (ws: Workspace) => void;
   onOpenConfig: () => void;
   statusMessage: string;
 }
 
-export function WelcomeScreen({ onSelectWorkspace, onOpenConfig, statusMessage }: WelcomeScreenProps) {
+export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace, onOpenConfig, statusMessage }: WelcomeScreenProps) {
   return (
     <div style={{
       flex: 1,
@@ -57,6 +60,41 @@ export function WelcomeScreen({ onSelectWorkspace, onOpenConfig, statusMessage }
           textAlign: 'center',
         }}>
           {statusMessage}
+        </div>
+      )}
+
+      {/* Existing workspaces */}
+      {workspaces.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+          <div style={{ fontSize: 13, color: '#8b949e', fontWeight: 600 }}>Existing Workspaces</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+            {workspaces.map((ws) => (
+              <button
+                key={ws.id}
+                onClick={() => onSwitchWorkspace(ws)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  background: '#161b22',
+                  border: '1px solid #30363d',
+                  cursor: 'pointer',
+                  color: '#e6edf3',
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 4,
+                  transition: 'border-color 0.15s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#58a6ff'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#30363d'; }}
+              >
+                <span style={{ fontWeight: 600 }}>{ws.name}</span>
+                <span style={{ fontSize: 11, color: '#484f58' }}>{ws.path}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

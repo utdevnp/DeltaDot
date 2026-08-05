@@ -7,6 +7,21 @@ export type Provider = 'github' | 'gitlab' | 'bitbucket';
 export type TaskProvider = 'none' | 'jira' | 'clickup' | 'github';
 export type ThemeMode = 'dark' | 'light' | 'system';
 
+export interface Workspace {
+  id: string;
+  name: string;
+  displayName?: string;
+  path: string;
+  color: string;
+  isDefault?: boolean;
+  config: AppConfig;
+}
+
+export const WORKSPACE_COLORS = [
+  '#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7',
+  '#39d2c0', '#f0883e', '#db61a2', '#768390', '#539bf5',
+] as const;
+
 export interface AppConfig {
   workspace: string;
   base: string;
@@ -18,12 +33,13 @@ export interface AppConfig {
   jiraUrl: string;
   jiraEmail: string;
   jiraApiToken: string;
-  aiProvider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'openrouter';
+  aiProvider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'openrouter' | 'deepseek';
   aiApiKey: string;
   aiApiUrl: string;
   aiModel: string;
   aiSystemPrompt: string;
   theme: ThemeMode;
+  defaultView?: 'list' | 'prs';
 }
 
 export interface CommitEntry {

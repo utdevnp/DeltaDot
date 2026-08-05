@@ -8,16 +8,17 @@ export async function fetchPRsByProvider(
   repo: string,
   provider: Provider,
   token: string,
-  repoName?: string
+  repoName?: string,
+  state: string = 'open'
 ): Promise<PR[]> {
   switch (provider) {
     case 'gitlab':
-      return fetchGitLabPRs(owner, repo, token, repoName);
+      return fetchGitLabPRs(owner, repo, token, repoName, state);
     case 'bitbucket':
-      return fetchBitbucketPRs(owner, repo, token, repoName);
+      return fetchBitbucketPRs(owner, repo, token, repoName, state);
     case 'github':
     default:
-      return fetchGitHubPRs(owner, repo, token, repoName);
+      return fetchGitHubPRs(owner, repo, token, repoName, state);
   }
 }
 

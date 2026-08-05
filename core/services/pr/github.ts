@@ -5,10 +5,11 @@ export async function fetchGitHubPRs(
   owner: string,
   repo: string,
   token: string,
-  repoName?: string
+  repoName?: string,
+  state: string = 'open'
 ): Promise<PR[]> {
   const headers = githubHeaders(token);
-  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=open&per_page=50`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=${state}&per_page=50`;
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const errorBody = await res.text();

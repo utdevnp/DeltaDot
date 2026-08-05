@@ -7,10 +7,17 @@ export async function getRemoteOwnerRepo(repoPath: string): Promise<{ owner: str
   try {
     const raw = await run('git remote get-url origin', repoPath);
     const s = raw.trim();
-    const httpsMatch = s.match(/^https:\/\/[^/]+\/([^/]+)\/([^/.]+)/);
+    // Strip trailing .git suffix for consistent parsing
+    const normalized = s.replace(/\.git$/, '');
+    // HTTPS: https://github.com/owner/repo
+    const httpsMatch = normalized.match(/^https:\/\/[^/]+\/([^/]+)\/([^/]+)/);
     if (httpsMatch) return { owner: httpsMatch[1]!, repo: httpsMatch[2]! };
-    const sshMatch = s.match(/^git@[^:]+:([^/]+)\/([^/.]+)/);
+    // SSH (git@): git@github.com:owner/repo
+    const sshMatch = normalized.match(/^git@[^:]+:([^/]+)\/([^/]+)/);
     if (sshMatch) return { owner: sshMatch[1]!, repo: sshMatch[2]! };
+    // SSH (ssh://): ssh://git@github.com/owner/repo
+    const sshUrlMatch = normalized.match(/^ssh:\/\/(?:[^@]+@)?([^/]+)\/([^/]+)\/([^/]+)/);
+    if (sshUrlMatch) return { owner: sshUrlMatch[2]!, repo: sshUrlMatch[3]! };
     return null;
   } catch { return null; }
 }
@@ -27,9 +34,10 @@ export async function fetchPRs(
   repo: string,
   provider: Provider,
   token: string,
-  repoName?: string
+  repoName?: string,
+  state?: string
 ): Promise<PR[]> {
-  return fetchPRsByProvider(owner, repo, provider, token, repoName);
+  return fetchPRsByProvider(owner, repo, provider, token, repoName, state);
 }
 
 export async function fetchPRDetail(

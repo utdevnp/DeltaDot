@@ -39,6 +39,7 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
   prs: [
     { key: '↑↓ j/k', desc: 'navigate' },
     { key: '↵', desc: 'detail' },
+    { key: 'f', desc: 'filter' },
     { key: 'R', desc: 'review' },
     { key: 'S', desc: 'sync + refresh' },
     { key: 'b / Esc', desc: 'back' },

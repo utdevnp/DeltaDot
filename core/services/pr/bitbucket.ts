@@ -5,10 +5,12 @@ export async function fetchBitbucketPRs(
   owner: string,
   repo: string,
   token: string,
-  repoName?: string
+  repoName?: string,
+  state: string = 'OPEN'
 ): Promise<PR[]> {
   const headers = bearerHeaders(token);
-  const url = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests?state=OPEN&pagelen=50`;
+  const apiState = state.toUpperCase() === 'ALL' ? 'MERGED,SUPERSEDED,OPEN' : state.toUpperCase() === 'CLOSED' ? 'DECLINED,MERGED,SUPERSEDED' : 'OPEN';
+  const url = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests?state=${apiState}&pagelen=50`;
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const errorBody = await res.text();

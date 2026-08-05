@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode } from '../core/types.js';
-import { getVisibleConfigFields } from '../core/types.js';
+import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace } from '../core/types.js';
+import { getVisibleConfigFields, WORKSPACE_COLORS } from '../core/types.js';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
 import { RepoList } from './components/RepoList';
@@ -12,6 +12,8 @@ import { PRDetailView } from './components/PRDetailView';
 import { ReviewView } from './components/ReviewView';
 import { CommandBar } from './components/CommandBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
+import { WorkspacePanel } from './components/WorkspacePanel';
+import { AddWorkspaceDialog } from './components/AddWorkspaceDialog';
 import { CloneDialog } from './components/CloneDialog';
 
 export function App() {
@@ -29,6 +31,11 @@ export function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Workspace management
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
   // Auto-clear status message after 8 seconds
   const showStatus = useCallback((msg: string, isError = false) => {
     if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
@@ -43,6 +50,8 @@ export function App() {
 
   // Clone dialog
   const [showCloneDialog, setShowCloneDialog] = useState(false);
+  const [showAddWorkspace, setShowAddWorkspace] = useState(false);
+  const [editWorkspace, setEditWorkspace] = useState<Workspace | null>(null);
 
   // Search / Command
   const [inputMode, setInputMode] = useState<'none' | 'search' | 'command'>('none');
@@ -53,6 +62,8 @@ export function App() {
   const [selectedPR, setSelectedPR] = useState(0);
   const [prLoading, setPRLoading] = useState(false);
   const [prError, setPRError] = useState('');
+  const [prFilter, setPRFilter] = useState<'open' | 'closed' | 'all'>('open');
+  const [prAllRepos, setPrAllRepos] = useState(false);
   const [prDetail, setPRDetail] = useState<PRDetail | null>(null);
   const [prDetailLoading, setPRDetailLoading] = useState(false);
   const [prDetailError, setPRDetailError] = useState('');
@@ -70,9 +81,55 @@ export function App() {
   useEffect(() => {
     (async () => {
       try {
-        const config = await window.api.initialize({});
+        const wsList = await window.api.loadWorkspaces();
+        setWorkspaces(wsList);
+
+        let config: AppConfig | null = null;
+        let wsId: string | null = null;
+
+        if (wsList.length > 0) {
+          // Use the last active workspace (saved to active-workspace file), or first one
+          const activeId = await window.api.loadActiveWorkspaceId();
+          wsId = (activeId as string) || wsList[0]!.id;
+          if (wsId) {
+            try {
+              config = await window.api.activateWorkspace(wsId);
+            } catch { config = null; }
+          }
+        }
+
+        // Fallback: load legacy global config
+        if (!config) {
+          config = await window.api.initialize({});
+        }
+
+        // Auto-create workspace from legacy config if workspace list is empty
+        if (wsList.length === 0 && config.workspace) {
+          const normalizedPath = config.workspace.replace(/\/+$/, '');
+          const name = normalizedPath.split('/').pop() ?? normalizedPath;
+          const legacyWs: Workspace = {
+            id: normalizedPath,
+            name,
+            displayName: name,
+            path: normalizedPath,
+            color: WORKSPACE_COLORS[0] ?? '#58a6ff',
+            isDefault: true,
+            config: { ...config, workspace: normalizedPath },
+          };
+          await window.api.addWorkspace(legacyWs);
+          wsList.push(legacyWs);
+          setWorkspaces([...wsList]);
+          wsId = normalizedPath;
+        }
+
         setCfg(config);
-        setWorkspacePath(config.workspace);
+        setWorkspacePath(config.workspace || '');
+        if (wsId) setActiveWorkspaceId(wsId);
+        // Set initial view from config
+        if (config.defaultView === 'prs') {
+          setView('prs');
+          // PR fetch will trigger via initialSyncDone effect
+        }
 
         if (config.workspace) {
           const paths = await window.api.findRepos(config.workspace);
@@ -88,12 +145,12 @@ export function App() {
               const cached = cache.repos.find((r: RepoState) => r.name === name);
               return cached
                 ? { ...cached, status: 'stale' as const }
-                : { name, path: p, status: 'loading' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null };
+                : { name, path: p, status: 'stale' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null };
             });
             lastSyncTime = cache.lastFullSync;
           } else {
             initialRepos = paths.map((p: string) => ({
-              name: p.split('/').pop() ?? p, path: p, status: 'loading' as const,
+              name: p.split('/').pop() ?? p, path: p, status: 'stale' as const,
               diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null,
               currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null,
             }));
@@ -149,54 +206,209 @@ export function App() {
     });
   }, []);
 
+  // ─── Workspace Management ─────────────────────────────────────────────────
+
+  const switchWorkspace = useCallback(async (ws: Workspace) => {
+    try {
+      const config = await window.api.activateWorkspace(ws.id);
+      setActiveWorkspaceId(ws.id);
+      setCfg(config);
+      setWorkspacePath(config.workspace);
+      setPRs([]);
+      // Reset any stale loading state from a previous/sync that might have been interrupted
+      setIsSyncing(false);
+      setSyncProgress({ done: 0, total: 0 });
+      let newRepos: RepoState[] = [];
+      if (config.workspace) {
+        const paths = await window.api.findRepos(config.workspace);
+        setRepoPaths(paths);
+        const cache = await window.api.loadCache(config.workspace);
+        let lastSyncTime = '';
+        if (cache && cache.base === config.base && cache.release === config.release) {
+          newRepos = paths.map((p: string) => {
+            const name = p.split('/').pop() ?? p;
+            const cached = cache.repos.find((r: RepoState) => r.name === name);
+            return cached ? { ...cached, status: 'stale' as const } : { name, path: p, status: 'stale' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null };
+          });
+          if (cache?.prs) setPRs(cache.prs);
+          lastSyncTime = cache.lastFullSync;
+          setLastSync(lastSyncTime);
+        } else {
+          newRepos = paths.map((p: string) => ({ name: p.split('/').pop() ?? p, path: p, status: 'stale' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null }));
+        }
+        setRepos(newRepos);
+        // Repos will be synced on initial load via the initialSyncDone effect.
+        // On workspace switch, just show cached data without syncing all repos again.
+      }
+      setView(config.defaultView === 'prs' ? 'prs' : 'list');
+      setSelectedRepo(0);
+      // Load PRs immediately if default view is PRs.
+      // Pass newRepos directly to avoid stale reposRef before React re-render.
+      if (config.defaultView === 'prs' && config.token) {
+        fetchAllPRsRef.current(undefined, newRepos);
+      }
+    } catch (err) {
+      console.error('switchWorkspace error:', err);
+      showStatus('Failed to switch workspace: ' + (err instanceof Error ? err.message : String(err)), true);
+    }
+  }, []);
+
+  // Sync all repos with given config directly (bypasses stale closure in syncAll)
+  const syncOneRepoDirect = useCallback(async (paths: string[], config: AppConfig) => {
+    setIsSyncing(true);
+    setSyncProgress({ done: 0, total: paths.length });
+    const results: RepoState[] = [];
+    let done = 0;
+    for (const p of paths) {
+      try {
+        const result = await window.api.syncOneRepo(p, config.base, config.release);
+        results.push(result);
+      } catch (err) {
+        results.push({ name: p.split('/').pop() ?? p, path: p, status: 'error' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: err instanceof Error ? err.message : String(err) });
+      }
+      done++;
+      setSyncProgress({ done, total: paths.length });
+      setRepos((prev) => {
+        const updated = [...prev];
+        const idx = updated.findIndex((r) => r.path === p);
+        if (idx !== -1) updated[idx] = results[results.length - 1]!;
+        return updated;
+      });
+    }
+    setLastSync(new Date().toISOString());
+    setIsSyncing(false);
+    try {
+      await window.api.saveCache({ workspace: config.workspace, base: config.base, release: config.release, lastFullSync: new Date().toISOString(), repos: results });
+    } catch {}
+  }, []);
+
+  const updateWorkspace = useCallback(async (ws: Workspace) => {
+    setWorkspaces((prev) => prev.map((w) => w.id === ws.id ? ws : w));
+    try {
+      const current = await window.api.loadWorkspaces();
+      const updated = current.map((w: Workspace) => w.id === ws.id ? ws : w);
+      await window.api.saveWorkspaces(updated);
+    } catch { /* non-fatal */ }
+  }, []);
+
+  const handleChangeView = useCallback(async (newView: 'list' | 'prs') => {
+    setView(newView);
+    if (cfg) {
+      const updatedCfg = { ...cfg, defaultView: newView };
+      setCfg(updatedCfg);
+      if (activeWorkspaceId) {
+        await window.api.saveWorkspaceConfig(activeWorkspaceId, updatedCfg);
+      } else {
+        await window.api.saveConfig(updatedCfg);
+      }
+    }
+    // Auto-fetch PRs when switching to PR view
+    if (newView === 'prs' && repos.length > 0 && cfg?.token) {
+      setPRError('');
+      fetchAllPRsRef.current();
+    }
+  }, [cfg, activeWorkspaceId, repos]);
+
   // ─── Workspace Selection ──────────────────────────────────────────────────
 
   const selectWorkspace = useCallback(async () => {
-    try {
-      const folder = await window.api.selectWorkspace();
-      if (!folder) return;
-
-      setWorkspacePath(folder);
-      setStatusMessage('Loading repos...');
-
-      const paths = await window.api.findRepos(folder);
-      setRepoPaths(paths);
-
-      const cache = await window.api.loadCache(folder);
-      let initialRepos: RepoState[];
-      if (cache && cache.base) {
-        initialRepos = paths.map((p: string) => {
-          const name = p.split('/').pop() ?? p;
-          const cached = cache.repos.find((r: RepoState) => r.name === name);
-          return cached
-            ? { ...cached, status: 'stale' as const }
-            : { name, path: p, status: 'loading' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null };
-        });
-        setLastSync(cache.lastFullSync);
-      } else {
-        initialRepos = paths.map((p: string) => ({
-          name: p.split('/').pop() ?? p, path: p, status: 'loading' as const,
-          diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null,
-          currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null,
-        }));
-      }
-      setRepos(initialRepos);
-
-      // Persist config
-      try {
-        const saved = await window.api.loadConfig();
-        saved.workspace = folder;
-        if (saved) await window.api.saveConfig(saved as AppConfig);
-      } catch { /* non-fatal */ }
-
-      setStatusMessage('');
-      setView('list');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('selectWorkspace error:', msg);
-      setStatusMessage('Failed to select workspace: ' + msg);
-    }
+    setShowAddWorkspace(true);
   }, []);
+
+  const handleAddWorkspaceSave = useCallback(async (folder: string, base: string, release: string, syncInterval: number) => {
+    setShowAddWorkspace(false);
+    const normalizedPath = folder.replace(/\/+$/, '');
+    // Check if workspace with this path already exists
+    const existing = workspaces.find((w) => w.path === normalizedPath || w.path === folder);
+    if (existing) {
+      // Update existing workspace's branches/interval
+      const updated = {
+        ...existing,
+        config: { ...existing.config, base, release, syncInterval },
+      };
+      await window.api.saveWorkspaceConfig(updated.id, updated.config);
+      // Also update the workspaces list
+      const allWs = await window.api.loadWorkspaces();
+      const idx = allWs.findIndex((w) => w.id === updated.id);
+      if (idx !== -1) {
+        allWs[idx] = updated;
+        await window.api.saveWorkspaces(allWs);
+      }
+      setWorkspaces(allWs);
+      await switchWorkspace(updated);
+      return;
+    }
+    const name = normalizedPath.split('/').pop() ?? normalizedPath;
+    const color = WORKSPACE_COLORS[workspaces.length % WORKSPACE_COLORS.length] ?? '#58a6ff';
+    const isDefault = workspaces.length === 0;
+    const ws: Workspace = {
+      id: normalizedPath,
+      name,
+      path: normalizedPath,
+      color,
+      isDefault,
+      config: {
+        workspace: normalizedPath,
+        base,
+        release,
+        syncInterval,
+        token: cfg?.token ?? '',
+        provider: cfg?.provider ?? 'github',
+        taskProvider: cfg?.taskProvider ?? 'none',
+        jiraUrl: cfg?.jiraUrl ?? '',
+        jiraEmail: cfg?.jiraEmail ?? '',
+        jiraApiToken: cfg?.jiraApiToken ?? '',
+        aiProvider: cfg?.aiProvider ?? 'none',
+        aiApiKey: cfg?.aiApiKey ?? '',
+        aiApiUrl: cfg?.aiApiUrl ?? '',
+        aiModel: cfg?.aiModel ?? '',
+        aiSystemPrompt: cfg?.aiSystemPrompt ?? '',
+        theme: cfg?.theme ?? 'system',
+      },
+    };
+    const wsList = await window.api.addWorkspace(ws);
+    setWorkspaces(wsList);
+    await switchWorkspace(ws);
+  }, [workspaces, cfg, switchWorkspace]);
+
+  const handleEditWorkspaceSave = useCallback(async (
+    id: string, name: string, folder: string, base: string, release: string, syncInterval: number
+  ) => {
+    setEditWorkspace(null);
+    try {
+      // Read fresh workspace list from IPC to avoid stale closure
+      const currentWorkspaces = await window.api.loadWorkspaces();
+      const ws = currentWorkspaces.find((w: Workspace) => w.id === id);
+      if (!ws) {
+        showStatus('Workspace not found for editing', true);
+        return;
+      }
+      const updated: Workspace = {
+        ...ws,
+        name,
+        displayName: name,
+        path: folder,
+        config: { ...ws.config, base, release, syncInterval, workspace: folder },
+      };
+      // Save config to per-workspace file
+      const configId = updated.path;
+      await window.api.saveWorkspaceConfig(configId, updated.config);
+      // Update workspaces list: replace the entry
+      const newList = currentWorkspaces.map((w: Workspace) =>
+        w.id === id ? { ...updated, id: configId } : w
+      );
+      await window.api.saveWorkspaces(newList);
+      setWorkspaces(newList);
+      if (id === activeWorkspaceId) {
+        setActiveWorkspaceId(configId);
+        setWorkspacePath(updated.path);
+        setCfg({ ...cfg!, ...updated.config });
+      }
+    } catch (err) {
+      console.error('handleEditWorkspaceSave error:', err);
+      showStatus('Failed to save workspace changes: ' + (err instanceof Error ? err.message : String(err)), true);
+    }
+  }, [activeWorkspaceId, cfg]);
 
   // Simple folder picker — just returns path, no side effects
   const browseWorkspace = useCallback(async (): Promise<string | null> => {
@@ -214,36 +426,54 @@ export function App() {
     setIsSyncing(true);
     setSyncProgress({ done: 0, total: repoPaths.length });
 
-    const results: RepoState[] = [];
-    for (let i = 0; i < repoPaths.length; i++) {
-      try {
-        const result = await window.api.syncOneRepo(repoPaths[i], cfg.base, cfg.release);
-        results.push(result);
-      } catch (err) {
-        results.push({
-          name: repoPaths[i].split('/').pop() ?? repoPaths[i],
-          path: repoPaths[i],
-          status: 'error',
-          diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null,
-          currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '',
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      setSyncProgress({ done: i + 1, total: repoPaths.length });
-    }
+    const results: RepoState[] = new Array(repoPaths.length);
+    let completed = 0;
 
-    setRepos(results);
-    const now = new Date().toISOString();
-    setLastSync(now);
+    const promises = repoPaths.map((path, i) =>
+      window.api.syncOneRepo(path, cfg.base, cfg.release)
+        .then((result) => {
+          results[i] = result;
+          completed++;
+          setRepos((prev) => {
+            if (i >= prev.length) return prev;
+            const next = [...prev];
+            next[i] = result;
+            return next;
+          });
+          setSyncProgress({ done: completed, total: repoPaths.length });
+        })
+        .catch((err) => {
+          const errorResult: RepoState = {
+            name: path.split('/').pop() ?? path,
+            path,
+            status: 'error',
+            diffCommits: [], latestCommits: [],
+            latestVersion: null, latestVersionDate: null,
+            currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '',
+            error: err instanceof Error ? err.message : String(err),
+          };
+          results[i] = errorResult;
+          completed++;
+          setRepos((prev) => {
+            if (i >= prev.length) return prev;
+            const next = [...prev];
+            next[i] = errorResult;
+            return next;
+          });
+          setSyncProgress({ done: completed, total: repoPaths.length });
+        })
+    );
+
+    await Promise.allSettled(promises);
+    setLastSync(new Date().toISOString());
     setIsSyncing(false);
 
-    // Save cache
     try {
       await window.api.saveCache({
         workspace: cfg.workspace,
         base: cfg.base,
         release: cfg.release,
-        lastFullSync: now,
+        lastFullSync: new Date().toISOString(),
         repos: results,
         prs: prs,
       });
@@ -271,6 +501,40 @@ export function App() {
     }
   }, [cfg, repos, prs]);
 
+  // ─── Sync Progress Listener ─────────────────────────────────────────────
+
+  const syncProgressRef = useRef(syncProgress);
+  useEffect(() => {
+    let rafId: number | null = null;
+    const cleanup = window.api.onSyncProgress((progress) => {
+      syncProgressRef.current = progress;
+      if (rafId === null) {
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          setSyncProgress(syncProgressRef.current);
+        });
+      }
+    });
+    return () => {
+      cleanup();
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  // ─── Initial Sync on Startup ────────────────────────────────────────────
+
+  const initialSyncDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (!cfg || repoPaths.length === 0 || initialSyncDoneRef.current) return;
+    initialSyncDoneRef.current = true;
+    syncAll().then(() => {
+      if (cfg.defaultView === 'prs' && cfg.token) {
+        fetchAllPRsRef.current();
+      }
+    });
+  }, [cfg, repoPaths, syncAll]);
+
   // ─── Auto-sync ───────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -281,8 +545,9 @@ export function App() {
 
   // ─── PR Fetching ─────────────────────────────────────────────────────────
 
-  const fetchPRsForRepo = useCallback(async (repoPath: string) => {
+  const fetchPRsForRepo = useCallback(async (repoPath: string, filterOverride?: 'open' | 'closed' | 'all') => {
     if (!cfg) return;
+    const filter = filterOverride ?? prFilter;
     setPRLoading(true);
     setPRError('');
     try {
@@ -309,14 +574,11 @@ export function App() {
         setPRLoading(false);
         return;
       }
-      const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token);
-      if (result.length === 0) {
-        setPRError('No open pull requests found for this repository.');
-      }
+      const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, undefined, filter);
+      result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setPRs(result);
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
-      // Map common API errors to user-friendly messages
       if (raw.includes('401')) {
         setPRError('Authentication failed. Your API token may be invalid or expired. Press e to update it.');
       } else if (raw.includes('403')) {
@@ -330,15 +592,119 @@ export function App() {
       }
     }
     setPRLoading(false);
-  }, [cfg]);
+  }, [cfg, prFilter]);
+
+  const fetchAllPRs = useCallback(async (filterOverride?: 'open' | 'closed' | 'all', reposOverride?: RepoState[]) => {
+    const currentCfg = cfgRef.current;
+    const currentRepos = reposOverride ?? reposRef.current;
+    if (!currentCfg || currentRepos.length === 0) return;
+    const filter = filterOverride ?? prFilter;
+    setPRLoading(true);
+    setPRError('');
+    setPRs([]);
+    const errors: string[] = [];
+    let completed = 0;
+    let loadedCount = 0;
+
+    const fetchOne = async (repo: RepoState) => {
+      try {
+        const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+        if (!remoteInfo) return;
+        let provider = currentCfg.provider;
+        if (!provider) {
+          const remoteUrl = await window.api.getRemoteUrl(repo.path);
+          provider = await window.api.detectProvider(remoteUrl);
+        }
+        if (!provider) return;
+        const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, filter);
+        if (result.length > 0) {
+          loadedCount++;
+          setPRs((prev) => {
+            const merged = [...prev, ...result];
+            merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            return merged;
+          });
+        }
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err);
+        // Map common API errors to user-friendly messages
+        let friendly = `${repo.name}: `;
+        if (raw.includes('401')) {
+          friendly += 'Authentication failed. Your token may be invalid or expired.';
+        } else if (raw.includes('403')) {
+          friendly += 'Access forbidden. Your token may lack permissions for this repository.';
+        } else if (raw.includes('404')) {
+          friendly += 'Repository or pull requests not found. Check the remote URL and repository name.';
+        } else if (raw.includes('rate limit') || raw.includes('429')) {
+          friendly += 'API rate limit exceeded. Wait a few minutes and try again.';
+        } else {
+          friendly += raw;
+        }
+        errors.push(friendly);
+      }
+    };
+
+    const promises = currentRepos.map((repo) =>
+      fetchOne(repo).finally(() => {
+        completed++;
+      })
+    );
+
+    await Promise.allSettled(promises);
+
+    // Only show error if NO PRs loaded at all — partial results keep PR list visible
+    if (errors.length > 0 && loadedCount === 0) {
+      setPRError(errors.length === 1 ? errors[0]! : `Failed for ${errors.length} repo(s). Check your token and network.`);
+    }
+    setPRLoading(false);
+  }, [cfg, repos, prFilter]);
 
   // ─── Keyboard Handler ────────────────────────────────────────────────────
+
+  const showStatusRef = useRef(showStatus);
+  showStatusRef.current = showStatus;
+  const syncOneRef = useRef(syncOne);
+  syncOneRef.current = syncOne;
+  const syncAllRef = useRef(syncAll);
+  syncAllRef.current = syncAll;
+  const fetchPRsForRepoRef = useRef(fetchPRsForRepo);
+  fetchPRsForRepoRef.current = fetchPRsForRepo;
+  const fetchAllPRsRef = useRef(fetchAllPRs);
+  fetchAllPRsRef.current = fetchAllPRs;
+  const prAllReposRef = useRef(prAllRepos);
+  prAllReposRef.current = prAllRepos;
+  const switchWorkspaceRef = useRef(switchWorkspace);
+  switchWorkspaceRef.current = switchWorkspace;
+  const selectWorkspaceRef = useRef(selectWorkspace);
+  selectWorkspaceRef.current = selectWorkspace;
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg;
+  const reposRef = useRef(repos);
+  reposRef.current = repos;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (inputMode !== 'none') return;
       if (showConfig) return;
       if (showCloneDialog) return;
+      if (showAddWorkspace) return;
+      if (editWorkspace) return;
+
+      // Global workspace shortcuts
+      if (e.key === 'w' && !e.metaKey && !e.ctrlKey) {
+        if (workspaces.length > 1) {
+          e.preventDefault();
+          const idx = workspaces.findIndex((w) => w.id === activeWorkspaceId);
+          const next = idx === -1 ? 0 : (idx + 1) % workspaces.length;
+          switchWorkspaceRef.current(workspaces[next]!);
+        }
+        return;
+      }
+      if (e.key === 'W') {
+        e.preventDefault();
+        selectWorkspaceRef.current();
+        return;
+      }
 
       switch (view) {
         case 'list': {
@@ -359,11 +725,11 @@ export function App() {
               break;
             case 'c': case 'Enter': {
               if (repos.length === 0) {
-                showStatus('No repositories to inspect. Select a workspace first.', true);
+                showStatusRef.current('No repositories to inspect. Select a workspace first.', true);
               } else if (!repos[selectedRepo]) {
-                showStatus('No repo selected.', true);
+                showStatusRef.current('No repo selected.', true);
               } else if (repos[selectedRepo].status === 'loading' || repos[selectedRepo].status === 'syncing') {
-                showStatus('Repo still loading. Wait for sync to finish.', true);
+                showStatusRef.current('Repo still loading. Wait for sync to finish.', true);
               } else {
                 setView('commits');
                 setSelectedCommit(0);
@@ -372,37 +738,51 @@ export function App() {
             }
             case 's': {
               if (repos.length === 0) {
-                showStatus('No repositories to sync. Select a workspace first.', true);
+                showStatusRef.current('No repositories to sync. Select a workspace first.', true);
               } else if (selectedRepo < repos.length && repos[selectedRepo]) {
                 if (repos[selectedRepo].status === 'syncing') {
-                  showStatus('Already syncing this repo.', true);
+                  showStatusRef.current('Already syncing this repo.', true);
                 } else {
-                  syncOne(repos[selectedRepo].path);
+                  syncOneRef.current(repos[selectedRepo].path);
                 }
               }
               break;
             }
             case 'S':
               if (repos.length === 0) {
-                showStatus('No repositories to sync. Select a workspace first.', true);
+                showStatusRef.current('No repositories to sync. Select a workspace first.', true);
               } else {
-                syncAll();
+                syncAllRef.current();
               }
               break;
             case 'e':
               setShowConfig(true);
               break;
-            case 'P': {
+            case 'p': {
               if (repos.length === 0) {
-                showStatus('No workspace selected. Select a workspace first.', true);
+                showStatusRef.current('No workspace selected.', true);
               } else if (!repos[selectedRepo]) {
-                showStatus('No repo selected.', true);
+                showStatusRef.current('No repo selected.', true);
               } else if (!cfg?.token || cfg.token.trim() === '') {
-                showStatus('API token not configured. Press e to open settings.', true);
+                showStatusRef.current('API token not configured. Press e to open settings.', true);
               } else {
                 setView('prs');
                 setPRError('');
-                fetchPRsForRepo(repos[selectedRepo].path);
+                setPrAllRepos(false);
+                fetchPRsForRepoRef.current(repos[selectedRepo].path);
+              }
+              break;
+            }
+            case 'P': {
+              if (repos.length === 0) {
+                showStatusRef.current('No workspace selected.', true);
+              } else if (!cfg?.token || cfg.token.trim() === '') {
+                showStatusRef.current('API token not configured. Press e to open settings.', true);
+              } else {
+                setView('prs');
+                setPRError('');
+                setPrAllRepos(true);
+                fetchAllPRsRef.current();
               }
               break;
             }
@@ -416,18 +796,18 @@ export function App() {
               break;
             case 'o': {
               if (repos.length === 0 || !repos[selectedRepo]) {
-                showStatus('No repo selected to open.', true);
+                showStatusRef.current('No repo selected to open.', true);
               } else if (!cfg) {
-                showStatus('Config not loaded.', true);
+                showStatusRef.current('Config not loaded.', true);
               } else {
                 window.api.getRemoteUrl(repos[selectedRepo].path).then((url) => {
                   if (!url) {
-                    showStatus('No remote URL found for this repository.', true);
+                    showStatusRef.current('No remote URL found for this repository.', true);
                     return;
                   }
                   window.api.getCompareUrl(url, cfg.base, cfg.release).then((compareUrl) => {
                     if (!compareUrl) {
-                      showStatus('Could not generate compare URL.', true);
+                      showStatusRef.current('Could not generate compare URL.', true);
                       return;
                     }
                     window.api.openUrl(compareUrl);
@@ -526,16 +906,41 @@ export function App() {
               }
               break;
             }
+            case 'o': {
+              const pr = prs[selectedPR];
+              if (pr?.url) window.api.openUrl(pr.url);
+              break;
+            }
+            case 'f': {
+              e.preventDefault();
+              const next = prFilter === 'open' ? 'closed' : prFilter === 'closed' ? 'all' : 'open';
+              setPRFilter(next);
+              setSelectedPR(0);
+              if (prAllReposRef.current) {
+                fetchAllPRsRef.current(next);
+              } else if (repos[selectedRepo]) {
+                fetchPRsForRepoRef.current(repos[selectedRepo].path, next);
+              }
+              break;
+            }
             case 'S':
               syncAll().then(() => {
-                if (repos[selectedRepo]) fetchPRsForRepo(repos[selectedRepo].path);
+                if (prAllReposRef.current) {
+                  fetchAllPRsRef.current();
+                } else if (repos[selectedRepo]) {
+                  fetchPRsForRepoRef.current(repos[selectedRepo].path);
+                }
               });
               break;
             case 'R': {
               const pr = prs[selectedPR];
-              if (pr && repos[selectedRepo]) {
+              if (pr && repos.length > 0) {
+                // Find the correct repo — PR may be from a different repo than repos[selectedRepo]
+                const prRepo = pr.repoName ? repos.find((r) => r.name === pr.repoName) : null;
+                const repo = prRepo ?? repos[selectedRepo];
+                if (!repo) break;
                 setReviewContext({
-                  repoPath: repos[selectedRepo].path,
+                  repoPath: repo.path,
                   prNumber: pr.number,
                   returnView: 'prs',
                 });
@@ -545,15 +950,16 @@ export function App() {
                 // Load Jira + PR detail
                 (async () => {
                   try {
+                    const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+                    const owner = remoteInfo?.owner ?? '';
                     const prDetail = await window.api.fetchPRDetail(
-                      pr.repoName ? '' : repos[selectedRepo].name,
-                      pr.repoName ?? repos[selectedRepo].name,
+                      owner,
+                      pr.repoName ?? repo.name,
                       pr.number,
                       cfg?.provider ?? 'github',
                       cfg?.token ?? '',
                     );
                     setPRDetail(prDetail);
-                    const remoteInfo = await window.api.getRemoteOwnerRepo(repos[selectedRepo].path);
                     const jiraConfig = cfg ? { url: cfg.jiraUrl, email: cfg.jiraEmail, apiToken: cfg.jiraApiToken } : null;
                     if (jiraConfig?.url && jiraConfig.email) {
                       const key = await window.api.extractJiraKey(
@@ -588,8 +994,10 @@ export function App() {
           switch (e.key) {
             case 'R': {
               if (prDetail) {
+                const prRepo = prDetail.repoName ? repos.find((r) => r.name === prDetail.repoName) : null;
+                const repoPath = prRepo?.path ?? repos[selectedRepo]?.path ?? '';
                 setReviewContext({
-                  repoPath: repos[selectedRepo]?.path ?? '',
+                  repoPath,
                   prNumber: prDetail.number,
                   returnView: 'prdetail',
                 });
@@ -645,7 +1053,7 @@ export function App() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext, syncOne, syncAll, fetchPRsForRepo, showStatus]);
+  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext]);
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
@@ -656,21 +1064,26 @@ export function App() {
   // ─── Config Save ─────────────────────────────────────────────────────────
 
   const handleConfigSave = useCallback(async (newConfig: AppConfig) => {
+    // Theme is always global — never save to workspace config
+    if (activeWorkspaceId) {
+      const { theme: _unused, ...wsConfig } = newConfig;
+      await window.api.saveWorkspaceConfig(activeWorkspaceId, wsConfig as AppConfig);
+    }
+    // Always save theme to global config
     await window.api.saveConfig(newConfig);
     setCfg(newConfig);
     setWorkspacePath(newConfig.workspace);
     setShowConfig(false);
-    // Re-init with new config
     if (newConfig.workspace) {
       const paths = await window.api.findRepos(newConfig.workspace);
       setRepoPaths(paths);
       setRepos(paths.map((p: string) => ({
-        name: p.split('/').pop() ?? p, path: p, status: 'loading' as const,
+        name: p.split('/').pop() ?? p, path: p, status: 'stale' as const,
         diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null,
         currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null,
       })));
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   const handleCloned = useCallback(async (name: string, path: string) => {
     setShowCloneDialog(false);
@@ -686,15 +1099,15 @@ export function App() {
     };
     setRepos((prev) => [newRepo, ...prev]);
     setRepoPaths((prev) => [path, ...prev]);
-    showStatus(`Cloned ${name}. Syncing...`);
+    showStatusRef.current(`Cloned ${name}. Syncing...`);
 
     if (cfg) {
       try {
         const result = await window.api.syncOneRepo(path, cfg.base, cfg.release);
         setRepos((prev) => prev.map((r) => r.path === path ? result : r));
-        showStatus(`${name} synced`);
+        showStatusRef.current(`${name} synced`);
       } catch {
-        showStatus(`Failed to sync ${name}`, true);
+        showStatusRef.current(`Failed to sync ${name}`, true);
       }
     }
   }, [cfg, showStatus]);
@@ -752,24 +1165,43 @@ export function App() {
             loading={prLoading}
             error={prError}
             selected={selectedPR}
+            filter={prFilter}
             onSelect={setSelectedPR}
             onBack={() => setView('list')}
             onOpenConfig={() => setShowConfig(true)}
+            onFilterChange={(f) => {
+              setPRFilter(f);
+              setSelectedPR(0);
+              if (prAllRepos) {
+                fetchAllPRsRef.current(f);
+              } else if (repos[selectedRepo]) {
+                fetchPRsForRepoRef.current(repos[selectedRepo].path, f);
+              }
+            }}
             onSelectPR={() => {
               const pr = prs[selectedPR];
-              if (pr && repos[selectedRepo]) {
+              if (pr && repos.length > 0) {
+                const prRepo = pr.repoName ? repos.find((r) => r.name === pr.repoName) : null;
+                const repo = prRepo ?? repos[selectedRepo];
+                if (!repo) return;
                 setPRDetailLoading(true);
                 setPRDetailError('');
-                window.api.fetchPRDetail(
-                  '',
-                  pr.repoName ?? repos[selectedRepo].name,
-                  pr.number,
-                  cfg.provider,
-                  cfg.token,
-                ).then((detail) => {
-                  setPRDetail(detail);
-                  setView('prdetail');
-                  setPRDetailLoading(false);
+                window.api.getRemoteOwnerRepo(repo.path).then((remoteInfo) => {
+                  const owner = remoteInfo?.owner ?? '';
+                  window.api.fetchPRDetail(
+                    owner,
+                    pr.repoName ?? repo.name,
+                    pr.number,
+                    cfg.provider,
+                    cfg.token,
+                  ).then((detail) => {
+                    setPRDetail(detail);
+                    setView('prdetail');
+                    setPRDetailLoading(false);
+                  }).catch((err) => {
+                    setPRDetailError(err instanceof Error ? err.message : String(err));
+                    setPRDetailLoading(false);
+                  });
                 }).catch((err) => {
                   setPRDetailError(err instanceof Error ? err.message : String(err));
                   setPRDetailLoading(false);
@@ -786,8 +1218,9 @@ export function App() {
             error={prDetailError}
             onBack={() => setView('prs')}
             onReview={() => {
+              const prRepo = prDetail.repoName ? repos.find((r) => r.name === prDetail.repoName) : null;
               setReviewContext({
-                repoPath: repos[selectedRepo]?.path ?? '',
+                repoPath: prRepo?.path ?? repos[selectedRepo]?.path ?? '',
                 prNumber: prDetail.number,
                 returnView: 'prdetail',
               });
@@ -842,15 +1275,29 @@ export function App() {
             isSyncing={isSyncing}
             syncProgress={syncProgress}
             lastSync={lastSync}
+            currentView={view === 'prs' ? 'prs' : 'list'}
             onSyncAll={syncAll}
             onSelectWorkspace={selectWorkspace}
             onOpenConfig={() => setShowConfig(true)}
+            onChangeView={handleChangeView}
             theme={cfg.theme}
             onToggleTheme={toggleTheme}
           />
 
-          <div className="main-content">
-            {renderView()}
+          <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+            <WorkspacePanel
+              workspaces={workspaces}
+              activeWorkspaceId={activeWorkspaceId}
+              collapsed={sidebarCollapsed}
+              onSwitch={switchWorkspace}
+              onAdd={selectWorkspace}
+              onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+              onUpdate={updateWorkspace}
+              onEdit={(ws) => setEditWorkspace(ws)}
+            />
+            <div className="main-content">
+              {renderView()}
+            </div>
           </div>
 
           <BottomBar currentView={view} />
@@ -879,7 +1326,9 @@ export function App() {
         </>
       ) : (
         <WelcomeScreen
+          workspaces={workspaces}
           onSelectWorkspace={selectWorkspace}
+          onSwitchWorkspace={switchWorkspace}
           onOpenConfig={() => setShowConfig(true)}
           statusMessage={statusMessage}
         />
@@ -911,12 +1360,12 @@ export function App() {
                 setShowConfig(true);
                 break;
               case 'sync':
-                syncAll();
+                syncAllRef.current();
                 break;
               case 'prs':
                 if (repos[selectedRepo]) {
                   setView('prs');
-                  fetchPRsForRepo(repos[selectedRepo].path);
+                  fetchPRsForRepoRef.current(repos[selectedRepo].path);
                 }
                 break;
             }
@@ -938,6 +1387,26 @@ export function App() {
           workspacePath={workspacePath}
           onClose={() => setShowCloneDialog(false)}
           onCloned={handleCloned}
+        />
+      )}
+
+      {showAddWorkspace && (
+        <AddWorkspaceDialog
+          onSave={handleAddWorkspaceSave}
+          onClose={() => setShowAddWorkspace(false)}
+          onBrowse={browseWorkspace}
+          defaultBase={cfg?.base ?? 'main'}
+          defaultRelease={cfg?.release ?? 'R10'}
+          defaultSyncInterval={cfg?.syncInterval ?? 30}
+        />
+      )}
+
+      {editWorkspace && (
+        <AddWorkspaceDialog
+          editWorkspace={editWorkspace}
+          onEditSave={handleEditWorkspaceSave}
+          onClose={() => setEditWorkspace(null)}
+          onBrowse={browseWorkspace}
         />
       )}
     </div>

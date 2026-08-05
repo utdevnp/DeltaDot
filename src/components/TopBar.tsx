@@ -11,9 +11,11 @@ interface TopBarProps {
   isSyncing: boolean;
   syncProgress: { done: number; total: number };
   lastSync: string;
+  currentView: 'list' | 'prs';
   onSyncAll: () => void;
   onSelectWorkspace: () => void;
   onOpenConfig: () => void;
+  onChangeView: (view: 'list' | 'prs') => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }
@@ -26,7 +28,7 @@ function truncatePath(p: string): string {
   return p;
 }
 
-export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, onSyncAll, onSelectWorkspace, onOpenConfig, theme, onToggleTheme }: TopBarProps) {
+export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, currentView, onSyncAll, onSelectWorkspace, onOpenConfig, onChangeView, theme, onToggleTheme }: TopBarProps) {
   const frame = Math.floor(Date.now() / 120) % SPINNER.length;
   const spinner = SPINNER[frame] ?? '?';
 
@@ -55,6 +57,26 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
       <span className="separator">│</span>
       <div className="info-group">
         <span className="value">{repoCount} {repoCount === 1 ? 'repo' : 'repos'}</span>
+      </div>
+      <div className="info-group">
+        <select
+          value={currentView}
+          onChange={(e) => onChangeView(e.target.value as 'list' | 'prs')}
+          style={{
+            padding: '2px 6px',
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border)',
+            borderRadius: 3,
+            color: 'var(--text-primary)',
+            fontSize: 12,
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+            outline: 'none',
+          }}
+        >
+          <option value="list">Repos</option>
+          <option value="prs">Pull Requests</option>
+        </select>
       </div>
       <div className={`sync-status ${isSyncing ? 'syncing' : lastSync ? 'synced' : ''}`}>
         {isSyncing ? (

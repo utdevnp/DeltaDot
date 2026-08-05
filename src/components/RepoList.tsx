@@ -66,9 +66,10 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
       {repos.map((repo, i) => {
         const isSelected = i === selected;
         const dim = repo.missingRelease && repo.status !== 'loading' && repo.status !== 'syncing';
-        const st = statusText(repo, frame + i * 2); // per-repo offset so spinners aren't in sync
+        const st = statusText(repo, frame + i * 2);
         const hasSpinner = repo.status === 'loading' || repo.status === 'stale' || repo.status === 'syncing';
-        const showAuthor = !hasSpinner && repo.lastCommitAuthor;
+        const showCached = repo.status !== 'loading';
+        const showAuthor = showCached && repo.lastCommitAuthor ? repo.lastCommitAuthor : '';
         const lastMsg = repo.error
           ? truncate(repo.error, 60)
           : truncate(repo.lastCommitMsg, 60);
@@ -127,7 +128,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
               fontFamily: 'var(--font-mono)', fontSize: 11,
               color: dim ? 'var(--text-dim)' : 'var(--text-secondary)',
             }}>
-              {hasSpinner ? '' : (repo.latestVersion || '-')}
+              {!showCached ? '' : (repo.latestVersion || '-')}
             </div>
 
             {/* AUTHOR */}
@@ -136,7 +137,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
               color: dim ? 'var(--text-dim)' : 'var(--text-secondary)',
               fontSize: 12,
             }}>
-              {showAuthor || ''}
+              {showAuthor}
             </div>
 
             {/* AGE */}
@@ -145,7 +146,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
               color: dim ? 'var(--text-dim)' : 'var(--text-dim)',
               fontFamily: 'var(--font-mono)', fontSize: 11,
             }}>
-              {hasSpinner ? '' : (formatAge(repo) || repo.lastCommitAge || '')}
+              {!showCached ? '' : (formatAge(repo) || repo.lastCommitAge || '')}
             </div>
 
             {/* LAST COMMIT */}
