@@ -11,6 +11,7 @@ interface PRDetailsPanelProps {
 const statusColor = (status: string) =>
   status === 'added' ? 'var(--accent-green)'
     : status === 'deleted' ? 'var(--accent-red)'
+    : status === 'modified' ? 'var(--accent-orange)'
     : 'var(--text-secondary)';
 
 /**
