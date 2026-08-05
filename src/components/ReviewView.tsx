@@ -122,8 +122,9 @@ export function ReviewView({ cfg, repoPath, prNumber, jiraIssue, loading, error,
       );
 
       addLog('Review complete', true);
-      // Ensure final text is set
-      if (result && streamedText !== result) setAIReview(result);
+      // Always force the final text so the review is never left blank
+      const finalText = result || streamedText;
+      if (finalText) setAIReview(finalText);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       addLog(msg, false);
@@ -270,10 +271,10 @@ export function ReviewView({ cfg, repoPath, prNumber, jiraIssue, loading, error,
         )}
 
         {tab === 'ai' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
             <div style={{ display: 'flex', flex: 1, gap: 12, minHeight: 0 }}>
               {/* Left — Review result (70%) */}
-              <div style={{ flex: 7, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <div style={{ flex: 7, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
                 {/* Idle state — button centered in the box */}
                 {!aiReview && !aiLoading && !aiError && (
                   <div style={{
@@ -313,8 +314,8 @@ export function ReviewView({ cfg, repoPath, prNumber, jiraIssue, loading, error,
                   </div>
                 )}
 
-                {/* Loading — spinner + phase with animated dots */}
-                {aiLoading && (
+                {/* Loading — spinner + phase with animated dots (only when nothing to show yet) */}
+                {aiLoading && !aiReview && (
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
                     <div style={{ textAlign: 'center' }}>
                       <div className="loading-spinner" />
@@ -329,33 +330,36 @@ export function ReviewView({ cfg, repoPath, prNumber, jiraIssue, loading, error,
                   <div className="error" style={{ flexShrink: 0 }}>{aiError}</div>
                 )}
 
-                {/* Result */}
-                {aiReview && !aiLoading && (
+                {/* Result — shown progressively while streaming, kept after completion */}
+                {aiReview && (
                   <>
-                    <div style={{ flexShrink: 0, textAlign: 'center', marginBottom: 8 }}>
-                      <button
-                        onClick={runReview}
-                        disabled={aiLoading}
-                        style={{
-                          padding: '6px 18px',
-                          borderRadius: 6,
-                          background: 'var(--accent-blue)',
-                          border: 'none',
-                          color: '#fff',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                          transition: 'background 0.15s',
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = '#4a90e2'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent-blue)'; }}
-                      >
-                        ↻ Run Again
-                      </button>
-                    </div>
+                    {!aiLoading && (
+                      <div style={{ flexShrink: 0, textAlign: 'center', marginBottom: 8 }}>
+                        <button
+                          onClick={runReview}
+                          disabled={aiLoading}
+                          style={{
+                            padding: '6px 18px',
+                            borderRadius: 6,
+                            background: 'var(--accent-blue)',
+                            border: 'none',
+                            color: '#fff',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            fontFamily: 'inherit',
+                            transition: 'background 0.15s',
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = '#4a90e2'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent-blue)'; }}
+                        >
+                          ↻ Run Again
+                        </button>
+                      </div>
+                    )}
                     <div style={{
                       flex: 1,
+                      minHeight: 0,
                       overflowY: 'auto',
                       fontFamily: 'var(--font-mono)',
                       fontSize: 12,

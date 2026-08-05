@@ -208,23 +208,29 @@ export async function streamAIReview(
 
   const userPrompt = buildReviewPrompt(jiraDescription, prFiles);
   let fullText = '';
+  // Reasoning models (e.g. DeepSeek) may stream only reasoning_content and leave
+  // content empty — keep it as a fallback so the review is never silently blank.
+  let reasoningText = '';
 
   const accumulate = (chunk: string) => {
     fullText += chunk;
     onChunk(chunk);
   };
+  const accumulateReasoning = (chunk: string) => {
+    reasoningText += chunk;
+  };
 
   switch (config.provider) {
-    case 'openai': await streamOpenAI(config, userPrompt, accumulate); break;
+    case 'openai': await streamOpenAI(config, userPrompt, accumulate, accumulateReasoning); break;
     case 'anthropic': await streamAnthropic(config, userPrompt, accumulate); break;
     case 'gemini': await streamGemini(config, userPrompt, accumulate); break;
     case 'ollama': await streamOllama(config, userPrompt, accumulate); break;
-    case 'openrouter': await streamOpenRouter(config, userPrompt, accumulate); break;
-    case 'deepseek': await streamDeepSeek(config, userPrompt, accumulate); break;
+    case 'openrouter': await streamOpenRouter(config, userPrompt, accumulate, accumulateReasoning); break;
+    case 'deepseek': await streamDeepSeek(config, userPrompt, accumulate, accumulateReasoning); break;
     default: throw new Error(`Unsupported AI provider: ${config.provider}`);
   }
 
-  return fullText;
+  return fullText || reasoningText;
 }
 
 // ─── SSE parser ────────────────────────────────────────────────────────────
@@ -232,6 +238,7 @@ export async function streamAIReview(
 async function readSSEStream(
   res: Response,
   onToken: (token: string) => void,
+  onReasoning?: (token: string) => void,
 ): Promise<void> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('Response body is not readable');
@@ -254,10 +261,15 @@ async function readSSEStream(
 
       try {
         const json = JSON.parse(trimmed.slice(6));
-        const content = json.choices?.[0]?.delta?.content
-          ?? json.choices?.[0]?.text
-          ?? '';
-        if (content) onToken(content);
+        const delta = json.choices?.[0]?.delta;
+        const content = delta?.content ?? json.choices?.[0]?.text ?? '';
+        if (content) {
+          onToken(content);
+        } else if (onReasoning && delta?.reasoning_content) {
+          // Reasoning models stream the "thinking" in reasoning_content with
+          // content: null — capture it so we can fall back to it if no answer arrives.
+          onReasoning(delta.reasoning_content);
+        }
       } catch { /* skip malformed JSON */ }
     }
   }
@@ -265,7 +277,7 @@ async function readSSEStream(
 
 // ─── Streaming implementations ─────────────────────────────────────────────
 
-async function streamOpenAI(config: AIConfig, prompt: string, onToken: (t: string) => void): Promise<void> {
+async function streamOpenAI(config: AIConfig, prompt: string, onToken: (t: string) => void, onReasoning?: (t: string) => void): Promise<void> {
   const baseUrl = normalizeUrl(config.apiUrl, 'https://api.openai.com/v1');
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -281,10 +293,10 @@ async function streamOpenAI(config: AIConfig, prompt: string, onToken: (t: strin
     }),
   });
   if (!res.ok) throw await apiError(res);
-  await readSSEStream(res, onToken);
+  await readSSEStream(res, onToken, onReasoning);
 }
 
-async function streamDeepSeek(config: AIConfig, prompt: string, onToken: (t: string) => void): Promise<void> {
+async function streamDeepSeek(config: AIConfig, prompt: string, onToken: (t: string) => void, onReasoning?: (t: string) => void): Promise<void> {
   const baseUrl = normalizeUrl(config.apiUrl, 'https://api.deepseek.com');
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -300,10 +312,10 @@ async function streamDeepSeek(config: AIConfig, prompt: string, onToken: (t: str
     }),
   });
   if (!res.ok) throw await apiError(res);
-  await readSSEStream(res, onToken);
+  await readSSEStream(res, onToken, onReasoning);
 }
 
-async function streamOpenRouter(config: AIConfig, prompt: string, onToken: (t: string) => void): Promise<void> {
+async function streamOpenRouter(config: AIConfig, prompt: string, onToken: (t: string) => void, onReasoning?: (t: string) => void): Promise<void> {
   let inputUrl = config.apiUrl.trim();
   if (!inputUrl) inputUrl = 'https://openrouter.ai';
   inputUrl = inputUrl.replace(/\/+$/, '');
@@ -331,7 +343,7 @@ async function streamOpenRouter(config: AIConfig, prompt: string, onToken: (t: s
     }),
   });
   if (!res.ok) throw await apiError(res);
-  await readSSEStream(res, onToken);
+  await readSSEStream(res, onToken, onReasoning);
 }
 
 async function streamAnthropic(config: AIConfig, prompt: string, onToken: (t: string) => void): Promise<void> {
