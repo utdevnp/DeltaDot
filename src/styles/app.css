@@ -353,6 +353,102 @@ html, body, #root {
   border: 1px solid var(--border);
 }
 
+/* ─── PR detail: 4-column meta grid ─────────────────────────────────────── */
+
+.pr-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 1100px) {
+  .pr-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.pr-meta-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.pr-meta-card .label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.pr-meta-card .value {
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* ─── PR detail: collapsible file changes ───────────────────────────────── */
+
+.pr-file-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.pr-file-header {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pr-file-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.pr-file-chevron {
+  color: var(--text-dim);
+  font-size: 11px;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.pr-file-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 62px;
+  flex-shrink: 0;
+}
+
+.pr-file-path {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-file-diff {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-primary);
+}
+
 .detail-stats {
   font-family: var(--font-mono);
   font-size: 12px;
