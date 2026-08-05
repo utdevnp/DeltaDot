@@ -265,11 +265,6 @@ html, body, #root {
   50% { opacity: 0.4; }
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
 /* Animated ellipsis (… running dots) */
 @keyframes loadingDots {
   0% { content: ''; }
@@ -281,17 +276,6 @@ html, body, #root {
 .loading-dots::after {
   content: '';
   animation: loadingDots 1.4s infinite steps(1);
-}
-
-/* Circular spinner used in AI review loading state */
-.loading-spinner {
-  width: 30px;
-  height: 30px;
-  margin: 0 auto;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent-blue);
-  border-radius: 50%;
-  animation: spin 0.9s linear infinite;
 }
 
 /* ─── Detail Views ───────────────────────────────────────────────────────── */
