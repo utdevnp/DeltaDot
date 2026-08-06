@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace } from '../core/types.js';
 import { getVisibleConfigFields, WORKSPACE_COLORS } from '../core/types.js';
+import { getPRsUrl } from '../core/remote.js';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
 import { RepoList } from './components/RepoList';
@@ -932,7 +933,7 @@ export function App() {
                 }
               });
               break;
-            case 'R': {
+            case 'r': {
               const pr = prs[selectedPR];
               if (pr && repos.length > 0) {
                 // Find the correct repo — PR may be from a different repo than repos[selectedRepo]
@@ -1042,6 +1043,20 @@ export function App() {
               setView(reviewContext.returnView);
               setReviewJira(null);
               break;
+            case 'o': {
+              // Open the PR in git
+              if (prDetail?.url) {
+                window.api.openUrl(prDetail.url);
+              } else if (reviewContext.repoPath) {
+                window.api.getRemoteUrl(reviewContext.repoPath)
+                  .then((remoteUrl) => {
+                    const pulls = getPRsUrl(remoteUrl);
+                    if (pulls) window.api.openUrl(`${pulls}/${reviewContext.prNumber}`);
+                  })
+                  .catch(() => { /* non-fatal */ });
+              }
+              break;
+            }
             case 'q':
               window.api.getAppInfo().then(() => window.close());
               break;
