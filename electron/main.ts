@@ -257,6 +257,15 @@ ipcMain.handle('get-git-user', async (_event, repoPath: string) => {
   return { name, email };
 });
 
+ipcMain.handle('get-github-user', async (_event, token: string) => {
+  try {
+    const { getGitHubUser } = await import('../core/services/pr/github.js');
+    return await getGitHubUser(token);
+  } catch {
+    return null;
+  }
+});
+
 ipcMain.handle('fetch-jira', async (_event, config: { url: string; email: string; apiToken: string }, issueKey: string) => {
   return fetchJiraIssue(config, issueKey);
 });

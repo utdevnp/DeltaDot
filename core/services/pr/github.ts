@@ -277,3 +277,18 @@ export async function createGitHubPRComment(
   const data = await res.json().catch(() => null) as { html_url?: string } | null;
   return data?.html_url ?? '';
 }
+
+// ─── Authenticated user ─────────────────────────────────────────────────────
+
+/**
+ * Returns the GitHub account the token belongs to (its login/name). Used to
+ * recognize comments authored by the current user so the app can display the
+ * local git identity instead of the token owner's username.
+ */
+export async function getGitHubUser(token: string): Promise<{ login: string; name: string } | null> {
+  const res = await fetch('https://api.github.com/user', { headers: githubHeaders(token) });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  if (!data?.login) return null;
+  return { login: data.login as string, name: (data.name as string) ?? '' };
+}

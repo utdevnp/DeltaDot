@@ -6,11 +6,13 @@ interface PRDetailViewProps {
   prDetail: PRDetail;
   loading: boolean;
   error: string;
+  ownAuthor?: string;
+  gitUserName?: string;
   onBack: () => void;
   onReview: () => void;
 }
 
-export function PRDetailView({ prDetail, loading, error, onBack, onReview }: PRDetailViewProps) {
+export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName, onBack, onReview }: PRDetailViewProps) {
   if (loading) {
     return <div className="state-message">Loading PR detail...</div>;
   }
@@ -119,7 +121,11 @@ export function PRDetailView({ prDetail, loading, error, onBack, onReview }: PRD
               border: '1px solid var(--border)',
             }}>
               <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>
-                <strong style={{ color: 'var(--text-secondary)' }}>{c.author}</strong>
+                <strong style={{ color: 'var(--text-secondary)' }}>
+                  {ownAuthor && c.author.toLowerCase() === ownAuthor.toLowerCase()
+                    ? (gitUserName || c.author)
+                    : c.author}
+                </strong>
                 {' · '}{c.path && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-yellow)' }}>{c.path}{c.line ? `:${c.line}` : ''}</span>}
                 {' · '}{new Date(c.createdAt).toLocaleString()}
               </div>

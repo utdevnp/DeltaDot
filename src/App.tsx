@@ -76,6 +76,28 @@ export function App() {
   const [reviewJira, setReviewJira] = useState<JiraIssue | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState('');
+  // Token-owner GitHub login + local git user name (for comment display)
+  const [ownAuthor, setOwnAuthor] = useState('');
+  const [gitUserName, setGitUserName] = useState('');
+
+  // Recognize which GitHub account the token belongs to
+  useEffect(() => {
+    if (cfg?.token && cfg.provider === 'github') {
+      window.api.getGitHubUser(cfg.token).then((u) => {
+        if (u?.login) setOwnAuthor(u.login);
+      }).catch(() => { /* non-fatal */ });
+    }
+  }, [cfg?.token, cfg?.provider]);
+
+  // Local git identity for the currently selected repo
+  const currentRepoPath = repos[selectedRepo]?.path;
+  useEffect(() => {
+    if (currentRepoPath) {
+      window.api.getGitUser(currentRepoPath).then((u) => setGitUserName(u.name)).catch(() => { /* non-fatal */ });
+    } else {
+      setGitUserName('');
+    }
+  }, [currentRepoPath]);
 
   // ─── Initialize ──────────────────────────────────────────────────────────
 
@@ -1231,6 +1253,8 @@ export function App() {
             prDetail={prDetail}
             loading={prDetailLoading}
             error={prDetailError}
+            ownAuthor={ownAuthor}
+            gitUserName={gitUserName}
             onBack={() => setView('prs')}
             onReview={() => {
               const prRepo = prDetail.repoName ? repos.find((r) => r.name === prDetail.repoName) : null;

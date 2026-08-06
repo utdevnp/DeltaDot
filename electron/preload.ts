@@ -21,6 +21,7 @@ export interface DeltaDotAPI {
   fetchPRDetail: (owner: string, repo: string, prNumber: number, provider: Provider, token: string) => Promise<PRDetail>;
   createPRComment: (owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => Promise<string>;
   getGitUser: (repoPath: string) => Promise<{ name: string; email: string }>;
+  getGitHubUser: (token: string) => Promise<{ login: string; name: string } | null>;
   fetchJira: (config: { url: string; email: string; apiToken: string }, issueKey: string) => Promise<JiraIssue>;
   extractJiraKey: (...sources: string[]) => Promise<string | null>;
   fetchAIReview: (aiConfig: any, jiraDescription: string, files: any[]) => Promise<string>;
@@ -66,6 +67,7 @@ const api: DeltaDotAPI = {
   fetchPRDetail: (owner, repo, prNumber, provider, token) => ipcRenderer.invoke('fetch-pr-detail', owner, repo, prNumber, provider, token),
   createPRComment: (owner, repo, prNumber, provider, token, body) => ipcRenderer.invoke('create-pr-comment', owner, repo, prNumber, provider, token, body),
   getGitUser: (repoPath) => ipcRenderer.invoke('get-git-user', repoPath),
+  getGitHubUser: (token) => ipcRenderer.invoke('get-github-user', token),
   fetchJira: (config, issueKey) => ipcRenderer.invoke('fetch-jira', config, issueKey),
   extractJiraKey: (...sources) => ipcRenderer.invoke('extract-jira-key', ...sources),
   fetchAIReview: (aiConfig, jiraDescription, files) => ipcRenderer.invoke('fetch-ai-review', aiConfig, jiraDescription, files),
