@@ -17,7 +17,7 @@ import {
   loadActiveWorkspaceId,
   saveActiveWorkspaceId,
 } from '../core/config.js';
-import { analyzeRepo, fetchCommitDetail } from '../core/git.js';
+import { analyzeRepo, fetchCommitDetail, run } from '../core/git.js';
 import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/remote.js';
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
@@ -235,6 +235,13 @@ ipcMain.handle('fetch-pr-detail', async (_event, owner: string, repo: string, pr
 
 ipcMain.handle('create-pr-comment', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => {
   return createPRComment(owner, repo, prNumber, provider, token, body);
+});
+
+ipcMain.handle('get-git-user', async (_event, repoPath: string) => {
+  // Fetch each value independently so a missing email doesn't swallow the name
+  const name = await run('git config user.name', repoPath).catch(() => '');
+  const email = await run('git config user.email', repoPath).catch(() => '');
+  return { name, email };
 });
 
 ipcMain.handle('fetch-jira', async (_event, config: { url: string; email: string; apiToken: string }, issueKey: string) => {

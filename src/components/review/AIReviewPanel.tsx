@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { AppConfig, JiraIssue, PRDetail, PRFile } from '../../../core/types.js';
 import { renderMarkdown } from '../../../core/markdown.js';
 
@@ -59,6 +59,13 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
   const [summary, setSummary] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [gitUser, setGitUser] = useState<{ name: string; email: string }>({ name: '', email: '' });
+  const [summaryView, setSummaryView] = useState<'preview' | 'edit'>('preview');
+
+  // Load the local git identity (used to sign the posted comment)
+  useEffect(() => {
+    window.api.getGitUser(repoPath).then((u) => setGitUser(u)).catch(() => { /* non-fatal */ });
+  }, [repoPath]);
 
   const addLog = (msg: string, ok?: boolean) => {
     setLog((prev) => [...prev, { msg, ok }]);
@@ -75,7 +82,17 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
     try {
       const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
       if (!remoteInfo) throw new Error('Could not detect remote repository');
-      const url = await window.api.createPRComment(remoteInfo.owner, remoteInfo.repo, prNumber, cfg.provider, cfg.token, summary.trim());
+      // Sign with the local git identity (the API author is the token owner, so
+      // we attribute the review explicitly to the git user in the body).
+      // Re-fetch at submit time in case the async identity lookup hasn't finished.
+      let name = gitUser.name;
+      let email = gitUser.email;
+      if (!name) {
+        const u = await window.api.getGitUser(repoPath).catch(() => null);
+        if (u) { name = u.name; email = u.email; }
+      }
+      const signature = name ? `\n\n— ${name}${email ? ` <${email}>` : ''}` : '';
+      const url = await window.api.createPRComment(remoteInfo.owner, remoteInfo.repo, prNumber, cfg.provider, cfg.token, summary.trim() + signature);
       setSubmitResult({ ok: true, msg: url || 'Comment posted successfully' });
     } catch (err) {
       setSubmitResult({ ok: false, msg: err instanceof Error ? err.message : String(err) });
@@ -91,6 +108,7 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
     setAILoading(true);
     setSummary('');
     setSubmitResult(null);
+    setSummaryView('preview');
 
     if (cfg.aiProvider === 'none') {
       setStep(0, 'done');
@@ -169,6 +187,9 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
 
   // Steps that have started — shown one by one while the review is running
   const startedSteps = steps.filter((s) => s.state !== 'pending');
+
+  // What will actually be posted: the editable summary + git-user signature
+  const signedSummary = summary + (gitUser.name ? `\n\n— ${gitUser.name}${gitUser.email ? ` <${gitUser.email}>` : ''}` : '');
 
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: 0, gap: 12 }}>
@@ -249,11 +270,10 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
               flex: 1,
               minHeight: 0,
               overflowY: 'auto',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12,
+              fontSize: 13,
               lineHeight: 1.6,
-              whiteSpace: 'pre-wrap',
               color: 'var(--text-primary)',
+              padding: '4px 4px 12px',
             }} dangerouslySetInnerHTML={{ __html: renderMarkdown(aiReview) }} />
           </>
         )}
@@ -295,28 +315,76 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
           </div>
 
           {panelTab === 'summary' ? (
-            /* Summary — editable textarea + submit as PR comment */
+            /* Summary — markdown preview + editable textarea + submit as PR comment */
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
-              <textarea
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                placeholder="AI review summary..."
-                style={{
+              {/* Edit / Preview toggle */}
+              <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)' }}>
+                <div
+                  onClick={() => setSummaryView('edit')}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    color: summaryView === 'edit' ? 'var(--accent-blue)' : 'var(--text-secondary)',
+                    borderBottom: summaryView === 'edit' ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                    marginBottom: -1,
+                  }}
+                >
+                  Edit
+                </div>
+                <div
+                  onClick={() => setSummaryView('preview')}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    color: summaryView === 'preview' ? 'var(--accent-blue)' : 'var(--text-secondary)',
+                    borderBottom: summaryView === 'preview' ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                    marginBottom: -1,
+                  }}
+                >
+                  Preview
+                </div>
+              </div>
+
+              {summaryView === 'edit' ? (
+                <textarea
+                  value={summary}
+                  onChange={(e) => setSummary(e.target.value)}
+                  placeholder="AI review summary..."
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    resize: 'none',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    color: 'var(--text-primary)',
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    padding: 10,
+                    outline: 'none',
+                  }}
+                />
+              ) : (
+                <div style={{
                   flex: 1,
                   minHeight: 0,
-                  resize: 'none',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
+                  overflowY: 'auto',
+                  fontSize: 13,
                   lineHeight: 1.6,
                   color: 'var(--text-primary)',
                   background: 'var(--bg-secondary)',
                   border: '1px solid var(--border)',
                   borderRadius: 6,
                   padding: 10,
-                  outline: 'none',
-                }}
-              />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                }} dangerouslySetInnerHTML={{ __html: renderMarkdown(signedSummary || '(empty summary)') }} />
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                 <button
                   onClick={submitComment}
                   disabled={submitting || !summary.trim() || aiLoading}
@@ -328,7 +396,7 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
                     color: '#fff',
                     fontSize: 12,
                     fontWeight: 600,
-                    cursor: submitting || !summary.trim() ? 'default' : 'pointer',
+                    cursor: submitting || !summary.trim() || aiLoading ? 'default' : 'pointer',
                     fontFamily: 'inherit',
                     opacity: submitting || !summary.trim() || aiLoading ? 0.6 : 1,
                     flexShrink: 0,
@@ -339,27 +407,31 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
                 >
                   {submitting ? 'Posting...' : 'Submit as Comment'}
                 </button>
-                {submitResult && (
-                  <div style={{
-                    fontSize: 12,
-                    color: submitResult.ok ? 'var(--accent-green)' : 'var(--accent-red)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    minWidth: 0,
-                  }}>
-                    {submitResult.ok ? '✓ ' : '✗ '}
-                    {submitResult.ok && /^https?:/.test(submitResult.msg) ? (
-                      <a
-                        href={submitResult.msg}
-                        onClick={(e) => { e.preventDefault(); window.api.openUrl(submitResult.msg); }}
-                        style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}
-                      >
-                        View comment
-                      </a>
-                    ) : submitResult.msg}
-                  </div>
-                )}
+                <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {gitUser.name && (
+                    <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                      Posting as {gitUser.name}
+                    </span>
+                  )}
+                  {submitResult && (
+                    <span style={{
+                      fontSize: 12,
+                      color: submitResult.ok ? 'var(--accent-green)' : 'var(--accent-red)',
+                      marginLeft: 8,
+                    }}>
+                      {submitResult.ok ? '✓ ' : '✗ '}
+                      {submitResult.ok && /^https?:/.test(submitResult.msg) ? (
+                        <a
+                          href={submitResult.msg}
+                          onClick={(e) => { e.preventDefault(); window.api.openUrl(submitResult.msg); }}
+                          style={{ color: 'var(--accent-blue)', textDecoration: 'underline' }}
+                        >
+                          View comment
+                        </a>
+                      ) : submitResult.msg}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
