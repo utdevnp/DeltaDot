@@ -56,6 +56,19 @@ function createWindow() {
     mainWindow.loadFile(join(__dirname, '..', '..', 'dist', 'index.html'));
   }
 
+  // Diagnostics — surface load failures in the terminal
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[DeltaDot] did-fail-load (${code}): ${desc} — ${url}`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error(`[DeltaDot] render-process-gone: ${JSON.stringify(details)}`);
+  });
+  mainWindow.webContents.on('console-message', (event: any) => {
+    // Electron >= 32: single object event { level, message, lineNumber, sourceId }
+    const message = event?.message ?? '';
+    if (/error|fail|uncaught/i.test(message)) console.error(`[renderer] ${message}`);
+  });
+
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 

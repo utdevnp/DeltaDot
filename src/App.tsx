@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace } from '../core/types.js';
 import { getVisibleConfigFields, WORKSPACE_COLORS } from '../core/types.js';
-import { getPRsUrl } from '../core/remote.js';
+import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
 import { RepoList } from './components/RepoList';
