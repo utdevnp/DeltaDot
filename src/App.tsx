@@ -1267,6 +1267,7 @@ export function App() {
             cfg={cfg}
             repoPath={reviewContext.repoPath}
             prNumber={reviewContext.prNumber}
+            prTitle={prDetail?.title}
             jiraIssue={reviewJira}
             loading={reviewLoading}
             error={reviewError}

@@ -8,6 +8,7 @@ interface ReviewViewProps {
   cfg: AppConfig;
   repoPath: string;
   prNumber: number;
+  prTitle?: string;
   jiraIssue: JiraIssue | null;
   loading: boolean;
   error: string;
@@ -23,7 +24,7 @@ type ReviewTab = 'jira' | 'pr' | 'ai';
  *   - PR Details → PRDetailsPanel
  *   - AI Review  → AIReviewPanel
  */
-export function ReviewView({ cfg, repoPath, prNumber, jiraIssue, loading, error, onBack }: ReviewViewProps) {
+export function ReviewView({ cfg, repoPath, prNumber, prTitle, jiraIssue, loading, error, onBack }: ReviewViewProps) {
   const [tab, setTab] = useState<ReviewTab>('jira');
   const [prDetail, setPrDetail] = useState<PRDetail | null>(null);
   const [prDetailLoading, setPrDetailLoading] = useState(false);
@@ -61,8 +62,8 @@ export function ReviewView({ cfg, repoPath, prNumber, jiraIssue, loading, error,
   return (
     <div className="review-container">
       <div style={{ padding: '8px 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ color: 'var(--text-secondary)', fontSize: 13, alignSelf: 'center' }}>
-          Review · PR #{prNumber}
+        <span style={{ color: 'var(--text-secondary)', fontSize: 13, alignSelf: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          Review · {prTitle || `PR #${prNumber}`}
         </span>
         <div style={{ flex: 1 }} />
         <button className="back-btn" onClick={onBack}>←</button>
