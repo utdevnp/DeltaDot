@@ -1,7 +1,7 @@
 {
   "name": "deltadot-desktop",
   "version": "1.0.0",
-  "description": "DeltaDot Desktop \u2014 Git workspace sync checker",
+  "description": "DeltaDot Desktop — Git workspace sync checker",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -17,8 +17,10 @@
   },
   "dependencies": {
     "@rolldown/binding-darwin-arm64": "^1.2.0",
+    "@tailwindcss/vite": "^4.3.3",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

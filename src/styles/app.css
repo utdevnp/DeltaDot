@@ -1,3 +1,28 @@
+/* Tailwind CSS v4 — theme + utilities only (no preflight reset, keeps existing design) */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Map the app's design tokens into Tailwind so utilities follow dark/light mode automatically */
+@theme {
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-border: var(--border);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-dim: var(--text-dim);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-green: var(--accent-green);
+  --color-accent-red: var(--accent-red);
+  --color-accent-yellow: var(--accent-yellow);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-accent-orange: var(--accent-orange);
+  --color-selection-bg: var(--selection-bg);
+}
+
+/* light: variant — active only when the app's light theme class is on <html> */
+@custom-variant light (&:where(.theme-light, .theme-light *));
+
 :root {
   --bg-primary: #0d1117;
   --bg-secondary: #161b22;
