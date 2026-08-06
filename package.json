@@ -1,11 +1,11 @@
 {
   "name": "deltadot-desktop",
   "version": "1.0.0",
-  "description": "DeltaDot Desktop — Git workspace sync checker",
+  "description": "DeltaDot Desktop \u2014 Git workspace sync checker",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
-    "dev": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && NODE_ENV=development electron dist-electron/electron/main.js --no-sandbox\"",
+    "dev": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && NODE_ENV=development electron dist-electron/electron/main.js --no-sandbox\"",
     "dev:electron": "NODE_ENV=development electron dist-electron/electron/main.js --no-sandbox",
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
