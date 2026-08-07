@@ -728,6 +728,24 @@ export function App() {
         selectWorkspaceRef.current();
         return;
       }
+      if (e.key === 'S') {
+        if (repos.length === 0) {
+          showStatusRef.current('No repositories to sync. Select a workspace first.', true);
+        } else {
+          const syncPromise = syncAllRef.current();
+          // In PR view, refresh the PR list after the sync completes
+          if (view === 'prs' && syncPromise) {
+            syncPromise.then(() => {
+              if (prAllReposRef.current) {
+                fetchAllPRsRef.current();
+              } else if (reposRef.current[selectedRepo]) {
+                fetchPRsForRepoRef.current(reposRef.current[selectedRepo].path);
+              }
+            }).catch(() => {});
+          }
+        }
+        return;
+      }
 
       switch (view) {
         case 'list': {
@@ -771,13 +789,6 @@ export function App() {
               }
               break;
             }
-            case 'S':
-              if (repos.length === 0) {
-                showStatusRef.current('No repositories to sync. Select a workspace first.', true);
-              } else {
-                syncAllRef.current();
-              }
-              break;
             case 'e':
               setShowConfig(true);
               break;
@@ -946,15 +957,6 @@ export function App() {
               }
               break;
             }
-            case 'S':
-              syncAll().then(() => {
-                if (prAllReposRef.current) {
-                  fetchAllPRsRef.current();
-                } else if (repos[selectedRepo]) {
-                  fetchPRsForRepoRef.current(repos[selectedRepo].path);
-                }
-              });
-              break;
             case 'r': {
               const pr = prs[selectedPR];
               if (pr && repos.length > 0) {
@@ -1119,8 +1121,10 @@ export function App() {
         diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null,
         currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null,
       })));
+      // Re-sync immediately with the freshly saved config so repos aren't left stale
+      syncOneRepoDirect(paths, newConfig);
     }
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, syncOneRepoDirect]);
 
   const handleCloned = useCallback(async (name: string, path: string) => {
     setShowCloneDialog(false);
