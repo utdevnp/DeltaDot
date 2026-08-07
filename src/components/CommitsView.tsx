@@ -85,13 +85,11 @@ export function CommitsView({ repo, selectedCommit, base, release, onSelectCommi
         flexShrink: 0,
       }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{repo.name}</span>
-        <button className="back-btn" onClick={onBack} style={{ marginLeft: 'auto' }}>←</button>
         <span style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-          {base} → {release}
+          {base} ← {release}
         </span>
         {hasDiff && (
           <span style={{
-            marginLeft: 'auto',
             padding: '2px 10px',
             borderRadius: 10,
             background: 'var(--tint-red)',
@@ -102,6 +100,8 @@ export function CommitsView({ repo, selectedCommit, base, release, onSelectCommi
             {diffCommits.length} commit{diffCommits.length !== 1 ? 's' : ''} behind
           </span>
         )}
+        <div style={{ flex: 1 }} />
+        <button className="back-btn" onClick={onBack}>←</button>
       </div>
 
       {/* Content */}

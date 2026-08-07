@@ -42,8 +42,10 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
   if (loading) {
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '8px 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button className="back-btn" onClick={onBack} style={{ marginLeft: 'auto' }}>←</button>
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pull Request</span>
+          <div style={{ flex: 1 }} />
+          <button className="back-btn" onClick={onBack}>←</button>
         </div>
         <div className="state-message">Loading pull requests...</div>
       </div>
@@ -57,8 +59,10 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
 
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '8px 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button className="back-btn" onClick={onBack} style={{ marginLeft: 'auto' }}>←</button>
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pull Request</span>
+          <div style={{ flex: 1 }} />
+          <button className="back-btn" onClick={onBack}>←</button>
         </div>
         <div style={{
           flex: 1,
@@ -111,12 +115,13 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '8px 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button className="back-btn" onClick={onBack} style={{ marginLeft: 'auto' }}>←</button>
+      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pull Request</span>
         <div style={{ flex: 1 }} />
         <FilterTab label="Open" active={filter === 'open'} onClick={() => onFilterChange('open')} />
         <FilterTab label="Closed" active={filter === 'closed'} onClick={() => onFilterChange('closed')} />
         <FilterTab label="All" active={filter === 'all'} onClick={() => onFilterChange('all')} />
+        <button className="back-btn" onClick={onBack}>←</button>
       </div>
       {prs.length === 0 ? (
         <div className="empty-state">
@@ -131,33 +136,35 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
       ) : (
         <div className="table-container">
           <div className="table-header">
-            <div className="cell" style={{ width: 50 }}>#</div>
-            <div className="cell" style={{ flex: 3 }}>TITLE</div>
-            <div className="cell" style={{ width: 70 }}>STATE</div>
-            <div className="cell" style={{ width: 50 }}>APRVD</div>
-            <div className="cell" style={{ width: 70 }}>AGE</div>
-            <div className="cell" style={{ width: 100 }}>AUTHOR</div>
+            <div className="cell" style={{ width: 50, flexShrink: 0 }}>#</div>
+            <div className="cell" style={{ flex: 3, minWidth: 0 }}>TITLE</div>
+            <div className="cell" style={{ width: 74, flexShrink: 0 }}>STATE</div>
+            <div className="cell" style={{ width: 44, flexShrink: 0, textAlign: 'center' }}>APRVD</div>
+            <div className="cell" style={{ width: 66, flexShrink: 0, textAlign: 'right', paddingRight: 18 }}>AGE</div>
+            <div className="cell" style={{ width: 120, flexShrink: 0 }}>AUTHOR</div>
           </div>
           {prs.map((pr, i) => (
             <div
               key={`${pr.repoName}-${pr.number}`}
-              className={`pr-row ${i === selected ? 'selected' : ''}`}
+              className={`table-row ${i === selected ? 'selected' : ''}`}
               onClick={() => { onSelect(i); onSelectPR(); }}
             >
-              <span className="pr-number">#{pr.number}</span>
-              <span className="pr-title" style={{ fontWeight: i === selected ? 600 : 400 }}>
+              <div className="cell pr-number" style={{ width: 50, flexShrink: 0 }}>#{pr.number}</div>
+              <div className="cell pr-title" style={{ flex: 3, minWidth: 0, fontWeight: i === selected ? 600 : 400 }}>
                 {pr.title}
-              </span>
-              <span className={`pr-state ${pr.state.toLowerCase()}`}>
-                {pr.state}
-              </span>
-              <span className="pr-approved">
-                {pr.approved ? '✓' : ''}
-              </span>
-              <span className="pr-age">{timeAgo(pr.createdAt)}</span>
-              <span style={{ color: 'var(--text-secondary)', fontSize: 12, minWidth: 100 }}>
+              </div>
+              <div className="cell" style={{ width: 74, flexShrink: 0 }}>
+                <span className={`pr-state ${pr.state.toLowerCase()}`}>{pr.state}</span>
+              </div>
+              <div className="cell" style={{ width: 44, flexShrink: 0, textAlign: 'center' }}>
+                <span className="pr-approved">{pr.approved ? '✓' : ''}</span>
+              </div>
+              <div className="cell pr-age" style={{ width: 66, flexShrink: 0, textAlign: 'right', paddingRight: 18 }}>
+                {timeAgo(pr.createdAt)}
+              </div>
+              <div className="cell" style={{ width: 120, flexShrink: 0, color: 'var(--text-secondary)', fontSize: 12 }}>
                 {pr.author}
-              </span>
+              </div>
             </div>
           ))}
         </div>

@@ -12,6 +12,15 @@ interface PRDetailViewProps {
   onReview: () => void;
 }
 
+/** Simple colored text for the PR state (no chip box). */
+function stateColor(state: string): string {
+  const s = state.toLowerCase();
+  if (s === 'open') return 'var(--accent-green)';
+  if (s === 'merged') return 'var(--accent-purple)';
+  if (s === 'closed') return 'var(--accent-red)';
+  return 'var(--text-secondary)';
+}
+
 export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName, onBack, onReview }: PRDetailViewProps) {
   if (loading) {
     return <div className="state-message">Loading PR detail...</div>;
@@ -38,8 +47,8 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
       <div className="detail-meta">
         <span className="meta-label">State</span>
         <span className="meta-value">
-          <span className={`pr-state ${prDetail.state.toLowerCase()}`}>{prDetail.state}</span>
-          {prDetail.draft && <span className="pr-state draft" style={{ marginLeft: 6 }}>DRAFT</span>}
+          <span style={{ color: stateColor(prDetail.state), fontWeight: 600 }}>{prDetail.state}</span>
+          {prDetail.draft && <span style={{ color: 'var(--text-secondary)', marginLeft: 6 }}>· DRAFT</span>}
         </span>
         <span className="meta-label">Author</span>
         <span className="meta-value">{prDetail.author}</span>

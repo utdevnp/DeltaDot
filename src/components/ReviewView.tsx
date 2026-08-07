@@ -61,9 +61,27 @@ export function ReviewView({ cfg, repoPath, prNumber, prTitle, jiraIssue, loadin
 
   return (
     <div className="review-container">
-      <div style={{ padding: '8px 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ color: 'var(--text-secondary)', fontSize: 13, alignSelf: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          Review · {prTitle || `PR #${prNumber}`}
+      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+        <span style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          flexShrink: 0,
+        }}>
+          Review
+        </span>
+        <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}>·</span>
+        <span style={{
+          fontSize: 15,
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {prTitle || `PR #${prNumber}`}
         </span>
         <div style={{ flex: 1 }} />
         <button className="back-btn" onClick={onBack}>←</button>

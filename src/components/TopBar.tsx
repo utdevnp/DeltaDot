@@ -51,7 +51,7 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
       <span className="separator">│</span>
       <div className="info-group">
         <span className="value">{base}</span>
-        <span className="arrow">→</span>
+        <span className="arrow">←</span>
         <span className="value">{release}</span>
       </div>
       <span className="separator">│</span>

@@ -232,7 +232,6 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
         alignItems: 'center',
         gap: 12,
       }}>
-        <button className="back-btn" onClick={onBack} style={{ marginLeft: 'auto' }}>←</button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontSize: 15,
@@ -253,6 +252,7 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
         }}>
           {detail.hash.slice(0, 7)}
         </span>
+        <button className="back-btn" onClick={onBack}>←</button>
       </div>
 
       {/* Meta section */}

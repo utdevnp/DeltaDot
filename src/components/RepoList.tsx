@@ -43,16 +43,29 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
 
   if (repos.length === 0) {
     return (
-      <div className="empty-state">
-        <div className="text" style={{ color: 'var(--text-dim)' }}>
-          {isSyncing ? 'Scanning repositories...' : 'No repositories found'}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Repositories</span>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{repos.length} repos</span>
+        </div>
+        <div className="empty-state">
+          <div className="text" style={{ color: 'var(--text-dim)' }}>
+            {isSyncing ? 'Scanning repositories...' : 'No repositories found'}
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="table-container">
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Repositories</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{repos.length} repos</span>
+      </div>
+      <div className="table-container">
       <div className="table-header">
         <div className="cell" style={{ width: 30, flexShrink: 0 }}>#</div>
         <div className="cell" style={{ flex: 2, minWidth: 140 }}>REPO</div>
@@ -160,6 +173,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

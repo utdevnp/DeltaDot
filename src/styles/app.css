@@ -276,8 +276,20 @@ html, body, #root {
   z-index: 1;
 }
 
+.table-header .cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 12px;
+}
+
+.table-header .cell:last-child {
+  padding-right: 0;
+}
+
 .table-row {
   display: flex;
+  align-items: center;
   padding: 6px 16px;
   border-bottom: 1px solid var(--bg-tertiary);
   cursor: pointer;
@@ -419,7 +431,7 @@ html, body, #root {
 .pr-meta-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 4px 24px;
   margin-bottom: 16px;
 }
 
@@ -431,15 +443,6 @@ html, body, #root {
 
 .pr-meta-card {
   min-width: 0;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  transition: border-color 0.15s;
-}
-
-.pr-meta-card:hover {
-  border-color: var(--border-strong);
 }
 
 .pr-meta-card .label {
@@ -448,7 +451,7 @@ html, body, #root {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-bottom: 6px;
+  margin-bottom: 3px;
 }
 
 .pr-meta-card .value {
@@ -658,34 +661,15 @@ html, body, #root {
 }
 
 /* ─── PR View ────────────────────────────────────────────────────────────── */
-
-.pr-row {
-  display: flex;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--bg-tertiary);
-  cursor: pointer;
-  gap: 12px;
-  align-items: center;
-}
-
-.pr-row:hover {
-  background: var(--tint-blue);
-}
-
-.pr-row.selected {
-  background: linear-gradient(90deg, var(--selection-bg), color-mix(in srgb, var(--selection-bg) 55%, transparent));
-  box-shadow: inset 3px 0 0 var(--accent-blue);
-}
+/* Rows use the shared .table-row/.cell grid so header and rows align perfectly */
 
 .pr-number {
   color: var(--accent-blue);
   font-family: var(--font-mono);
   font-size: 12px;
-  min-width: 50px;
 }
 
 .pr-title {
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -704,6 +688,30 @@ html, body, #root {
 .pr-state.closed { background: var(--tint-red); color: var(--accent-red); border: 1px solid var(--border-red); }
 .pr-state.draft { background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border); }
 
+/* ─── Chips (Jira status / issue type) ──────────────────────────────────── */
+
+.jira-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.jira-chip.green  { background: var(--tint-green); color: var(--accent-green); border-color: var(--border-green); }
+.jira-chip.blue   { background: var(--tint-blue); color: var(--accent-blue); border-color: var(--border-blue); }
+.jira-chip.red    { background: var(--tint-red); color: var(--accent-red); border-color: var(--border-red); }
+.jira-chip.yellow { background: var(--tint-yellow); color: var(--accent-yellow); border-color: var(--border-yellow); }
+.jira-chip.purple { background: var(--tint-purple); color: var(--accent-purple); border-color: color-mix(in srgb, var(--accent-purple) 40%, transparent); }
+.jira-chip.dim    { background: var(--bg-tertiary); color: var(--text-secondary); border-color: var(--border); }
+
 .pr-approved {
   color: var(--accent-green);
   font-size: 14px;
@@ -712,8 +720,6 @@ html, body, #root {
 .pr-age {
   color: var(--text-dim);
   font-size: 12px;
-  min-width: 40px;
-  text-align: right;
 }
 
 /* ─── Review View ────────────────────────────────────────────────────────── */

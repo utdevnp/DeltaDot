@@ -167,3 +167,4 @@ Views: `list` (repos), `commits`, `detail` (commit), `prs`, `prdetail`, `review`
 - Renderer state changes use function updaters (`setRepos((prev) => …)`) to avoid stale closures; use `useRef` mirrors (`syncAllRef`, `reposRef`, `cfgRef`) for keyboard handlers.
 - Styles: prefer the existing CSS-variable tokens (`var(--bg-secondary)`, `var(--accent-blue)`…). Tailwind utilities are available; keep dark/light correctness by using token-mapped classes (`bg-bg-secondary`).
 - Paths in imports use `../core/*.js` extensions (ESM).
+- **Table / list views always use a title bar**: view title on the left, actions (filters, badges, counts) in the middle, and the back button as the **last element at the right end** — never before the title or sandwiched between content. Applies to `prs`, `commits`, `detail` (commit), `list` (no back button, title + count), and any future table view.

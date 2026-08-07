@@ -14,6 +14,15 @@ const statusColor = (status: string) =>
     : status === 'modified' ? 'var(--accent-orange)'
     : 'var(--text-secondary)';
 
+/** Simple colored text for the PR state (no chip box). */
+const stateColor = (state: string) => {
+  const s = state.toLowerCase();
+  if (s === 'open') return 'var(--accent-green)';
+  if (s === 'merged') return 'var(--accent-purple)';
+  if (s === 'closed') return 'var(--accent-red)';
+  return 'var(--text-secondary)';
+};
+
 /**
  * Renders the patch text of a file with simple diff coloring.
  */
@@ -68,8 +77,8 @@ export function PRDetailsPanel({ prDetail, loading, error }: PRDetailsPanelProps
       label: 'State',
       value: (
         <span>
-          <span className={`pr-state ${prDetail.state.toLowerCase()}`}>{prDetail.state}</span>
-          {prDetail.draft && <span className="pr-state draft" style={{ marginLeft: 6 }}>DRAFT</span>}
+          <span style={{ color: stateColor(prDetail.state), fontWeight: 600 }}>{prDetail.state}</span>
+          {prDetail.draft && <span style={{ color: 'var(--text-secondary)', marginLeft: 6 }}>· DRAFT</span>}
         </span>
       ),
     },
