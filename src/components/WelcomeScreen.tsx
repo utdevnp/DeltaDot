@@ -26,22 +26,22 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
           width: 56,
           height: 56,
           borderRadius: 14,
-          background: 'linear-gradient(135deg, #58a6ff 0%, #39d2c0 100%)',
+          background: 'linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-cyan) 100%)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           fontSize: 24,
           fontWeight: 700,
-          color: '#0d1117',
-          boxShadow: '0 8px 32px rgba(88, 166, 255, 0.2)',
+          color: 'var(--bg-primary)',
+          boxShadow: '0 8px 32px var(--glow-blue)',
         }}>
           D
         </div>
         <div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: '#e6edf3', letterSpacing: '-0.5px' }}>
+          <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>
             DeltaDot
           </div>
-          <div style={{ fontSize: 14, color: '#8b949e', marginTop: 4 }}>
+          <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 4 }}>
             Git Workspace Sync Manager
           </div>
         </div>
@@ -52,9 +52,9 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
         <div style={{
           padding: '10px 16px',
           borderRadius: 8,
-          background: 'rgba(248, 81, 73, 0.1)',
-          border: '1px solid rgba(248, 81, 73, 0.3)',
-          color: '#f85149',
+          background: 'var(--tint-red)',
+          border: '1px solid var(--border-red)',
+          color: 'var(--accent-red)',
           fontSize: 13,
           maxWidth: 400,
           textAlign: 'center',
@@ -66,7 +66,7 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
       {/* Existing workspaces */}
       {workspaces.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
-          <div style={{ fontSize: 13, color: '#8b949e', fontWeight: 600 }}>Existing Workspaces</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 600 }}>Existing Workspaces</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
             {workspaces.map((ws) => (
               <button
@@ -75,23 +75,29 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
                 style={{
                   padding: '8px 16px',
                   borderRadius: 8,
-                  background: '#161b22',
-                  border: '1px solid #30363d',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
                   cursor: 'pointer',
-                  color: '#e6edf3',
+                  color: 'var(--text-primary)',
                   fontSize: 13,
                   fontFamily: 'inherit',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
                   gap: 4,
-                  transition: 'border-color 0.15s',
+                  transition: 'border-color 0.15s, background 0.15s',
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#58a6ff'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#30363d'; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--accent-blue)';
+                  e.currentTarget.style.background = 'var(--bg-hover)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border)';
+                  e.currentTarget.style.background = 'var(--bg-secondary)';
+                }}
               >
                 <span style={{ fontWeight: 600 }}>{ws.name}</span>
-                <span style={{ fontSize: 11, color: '#484f58' }}>{ws.path}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{ws.path}</span>
               </button>
             ))}
           </div>
@@ -110,8 +116,8 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
             width: 260,
             padding: '24px 20px',
             borderRadius: 12,
-            background: '#161b22',
-            border: '1px solid #30363d',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
             cursor: 'pointer',
             display: 'flex',
             flexDirection: 'column',
@@ -121,32 +127,35 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
             fontFamily: 'inherit',
             fontSize: 'inherit',
             color: 'inherit',
-            transition: 'border-color 0.15s, background 0.15s',
+            transition: 'border-color 0.15s, background 0.15s, box-shadow 0.15s',
           }}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.borderColor = '#58a6ff';
-            (e.currentTarget as HTMLButtonElement).style.background = '#1c2333';
+            (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent-blue)';
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)';
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 8px 24px var(--glow-blue)';
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
-            (e.currentTarget as HTMLButtonElement).style.background = '#161b22';
+            (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)';
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-secondary)';
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = 'none';
           }}
         >
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
           </svg>
-          <div style={{ fontSize: 16, fontWeight: 600, color: '#e6edf3' }}>Select Workspace</div>
-          <div style={{ fontSize: 13, color: '#8b949e', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>Select Workspace</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
             Choose a folder containing Git repositories to monitor and sync
           </div>
           <div style={{
             marginTop: 4,
             padding: '8px 24px',
             borderRadius: 8,
-            background: '#238636',
+            background: 'linear-gradient(135deg, var(--btn-green-dark), var(--btn-green))',
             color: '#fff',
             fontSize: 14,
             fontWeight: 600,
+            boxShadow: '0 4px 14px color-mix(in srgb, var(--btn-green) 35%, transparent)',
           }}>
             Browse Folders
           </div>
@@ -162,8 +171,8 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
             width: 260,
             padding: '24px 20px',
             borderRadius: 12,
-            background: '#161b22',
-            border: '1px solid #30363d',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
             cursor: 'pointer',
             display: 'flex',
             flexDirection: 'column',
@@ -173,32 +182,34 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
             fontFamily: 'inherit',
             fontSize: 'inherit',
             color: 'inherit',
-            transition: 'border-color 0.15s, background 0.15s',
+            transition: 'border-color 0.15s, background 0.15s, box-shadow 0.15s',
           }}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.borderColor = '#d29922';
-            (e.currentTarget as HTMLButtonElement).style.background = '#1c2333';
+            (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent-yellow)';
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)';
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 8px 24px color-mix(in srgb, var(--accent-yellow) 25%, transparent)';
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
-            (e.currentTarget as HTMLButtonElement).style.background = '#161b22';
+            (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)';
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-secondary)';
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = 'none';
           }}
         >
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#d29922" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--accent-yellow)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
-          <div style={{ fontSize: 16, fontWeight: 600, color: '#e6edf3' }}>Configure Settings</div>
-          <div style={{ fontSize: 13, color: '#8b949e', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>Configure Settings</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
             Set up branches, API tokens, and provider preferences
           </div>
           <div style={{
             marginTop: 4,
             padding: '8px 24px',
             borderRadius: 8,
-            background: '#21262d',
-            border: '1px solid #30363d',
-            color: '#e6edf3',
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border-strong)',
+            color: 'var(--text-primary)',
             fontSize: 14,
             fontWeight: 600,
           }}>
@@ -209,10 +220,10 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
 
       {/* Keyboard hints */}
       <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 13, color: '#484f58', lineHeight: 1.6 }}>
-          Press <span style={{ padding: '2px 6px', background: '#21262d', borderRadius: 4, border: '1px solid #30363d', fontFamily: 'SF Mono, monospace', fontSize: 12 }}>:</span> for commands
+        <div style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+          Press <span style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: 4, border: '1px solid var(--border-strong)', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)' }}>:</span> for commands
           {' '}·{' '}
-          <span style={{ padding: '2px 6px', background: '#21262d', borderRadius: 4, border: '1px solid #30363d', fontFamily: 'SF Mono, monospace', fontSize: 12 }}>e</span> for settings
+          <span style={{ padding: '2px 6px', background: 'var(--bg-tertiary)', borderRadius: 4, border: '1px solid var(--border-strong)', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)' }}>e</span> for settings
         </div>
       </div>
     </div>

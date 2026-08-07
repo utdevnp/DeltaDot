@@ -137,7 +137,7 @@ export function App() {
             name,
             displayName: name,
             path: normalizedPath,
-            color: WORKSPACE_COLORS[0] ?? '#58a6ff',
+            color: WORKSPACE_COLORS[0] ?? '#3b82f6',
             isDefault: true,
             config: { ...config, workspace: normalizedPath },
           };
@@ -364,7 +364,7 @@ export function App() {
       return;
     }
     const name = normalizedPath.split('/').pop() ?? normalizedPath;
-    const color = WORKSPACE_COLORS[workspaces.length % WORKSPACE_COLORS.length] ?? '#58a6ff';
+    const color = WORKSPACE_COLORS[workspaces.length % WORKSPACE_COLORS.length] ?? '#3b82f6';
     const isDefault = workspaces.length === 0;
     const ws: Workspace = {
       id: normalizedPath,
@@ -920,37 +920,7 @@ export function App() {
             case 'G':
               setSelectedPR(prs.length - 1);
               break;
-            case 'Enter': {
-              const pr = prs[selectedPR];
-              if (pr && repos[selectedRepo]) {
-                setPRDetailLoading(true);
-                setPRDetailError('');
-                (async () => {
-                  try {
-                    // Resolve the real owner/repo from the PR's own repo remote
-                    // (PRs may come from another repo in all-repos mode)
-                    const prRepo = pr.repoName ? repos.find((r) => r.name === pr.repoName) : null;
-                    const repo = prRepo ?? repos[selectedRepo];
-                    const remoteInfo = repo ? await window.api.getRemoteOwnerRepo(repo.path) : null;
-                    const owner = remoteInfo?.owner ?? '';
-                    const repoName = pr.repoName || remoteInfo?.repo || repo?.name || '';
-                    const detail = await window.api.fetchPRDetail(
-                      owner,
-                      repoName,
-                      pr.number,
-                      cfg?.provider ?? 'github',
-                      cfg?.token ?? '',
-                    );
-                    setPRDetail(detail);
-                    setView('prdetail');
-                  } catch (err) {
-                    setPRDetailError(err instanceof Error ? err.message : String(err));
-                  }
-                  setPRDetailLoading(false);
-                })();
-              }
-              break;
-            }
+
             case 'o': {
               const pr = prs[selectedPR];
               if (pr?.url) window.api.openUrl(pr.url);
@@ -968,7 +938,9 @@ export function App() {
               }
               break;
             }
-            case 'r': {
+            case 'Enter': case 'r': {
+              // Enter behaves like 'r': open the AI review for the selected PR
+              e.preventDefault();
               const pr = prs[selectedPR];
               if (pr && repos.length > 0) {
                 // Find the correct repo — PR may be from a different repo than repos[selectedRepo]
@@ -1372,14 +1344,14 @@ export function App() {
             <div style={{
               padding: '6px 16px',
               background: statusMessage.toLowerCase().includes('fail') || statusMessage.toLowerCase().includes('error') || statusMessage.toLowerCase().includes('not')
-                ? 'rgba(248,81,73,0.12)'
-                : 'rgba(88,166,255,0.1)',
+                ? 'var(--tint-red)'
+                : 'var(--tint-blue)',
               borderTop: statusMessage.toLowerCase().includes('fail') || statusMessage.toLowerCase().includes('error') || statusMessage.toLowerCase().includes('not')
-                ? '1px solid rgba(248,81,73,0.3)'
-                : '1px solid rgba(88,166,255,0.2)',
+                ? '1px solid var(--border-red)'
+                : '1px solid var(--border-blue)',
               color: statusMessage.toLowerCase().includes('fail') || statusMessage.toLowerCase().includes('error') || statusMessage.toLowerCase().includes('not')
-                ? '#f85149'
-                : '#58a6ff',
+                ? 'var(--accent-red)'
+                : 'var(--accent-blue)',
               fontSize: 12,
               flexShrink: 0,
               display: 'flex',

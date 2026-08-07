@@ -11,7 +11,7 @@ function DiffLine({ line }: { line: string }) {
     return (
       <div style={{
         padding: '1px 12px',
-        background: 'rgba(56,139,253,0.08)',
+        background: 'var(--tint-blue)',
         color: 'var(--accent-blue)',
         fontFamily: 'var(--font-mono)',
         fontSize: 12,
@@ -25,8 +25,8 @@ function DiffLine({ line }: { line: string }) {
     return (
       <div style={{
         padding: '1px 12px',
-        background: 'rgba(63,185,80,0.12)',
-        color: '#3fb950',
+        background: 'var(--tint-green)',
+        color: 'var(--accent-green)',
         fontFamily: 'var(--font-mono)',
         fontSize: 12,
         lineHeight: 1.5,
@@ -40,8 +40,8 @@ function DiffLine({ line }: { line: string }) {
     return (
       <div style={{
         padding: '1px 12px',
-        background: 'rgba(248,81,73,0.1)',
-        color: '#f85149',
+        background: 'var(--tint-red)',
+        color: 'var(--accent-red)',
         fontFamily: 'var(--font-mono)',
         fontSize: 12,
         lineHeight: 1.5,
@@ -108,15 +108,15 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
         {/* Status icon */}
         <span style={{ flexShrink: 0, fontSize: 12, lineHeight: 1 }}>
           {file.status === 'added' ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3fb950" strokeWidth="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" strokeWidth="2">
               <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
             </svg>
           ) : file.status === 'deleted' ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f85149" strokeWidth="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="2">
               <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
             </svg>
           ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d29922" strokeWidth="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-yellow)" strokeWidth="2">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
             </svg>
@@ -149,22 +149,22 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
           <div style={{
             width: addWidth,
             height: '100%',
-            background: '#3fb950',
+            background: 'var(--accent-green)',
             transition: 'width 0.2s',
           }} />
           <div style={{
             flex: 1,
             height: '100%',
-            background: '#f85149',
+            background: 'var(--accent-red)',
             transition: 'width 0.2s',
           }} />
         </div>
 
         {/* Counts */}
         <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
-          {file.additions > 0 && <span style={{ color: '#3fb950' }}>+{file.additions}</span>}
+          {file.additions > 0 && <span style={{ color: 'var(--accent-green)' }}>+{file.additions}</span>}
           {file.additions > 0 && file.deletions > 0 && <span style={{ color: 'var(--text-dim)' }}> </span>}
-          {file.deletions > 0 && <span style={{ color: '#f85149' }}>-{file.deletions}</span>}
+          {file.deletions > 0 && <span style={{ color: 'var(--accent-red)' }}>-{file.deletions}</span>}
         </span>
 
         {/* Expand icon */}
@@ -278,8 +278,8 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <span style={{ color: 'var(--text-dim)' }}>Changes:</span>
-          <span style={{ color: '#3fb950' }}>+{totalAdditions}</span>
-          <span style={{ color: '#f85149' }}>-{totalDeletions}</span>
+          <span style={{ color: 'var(--accent-green)' }}>+{totalAdditions}</span>
+          <span style={{ color: 'var(--accent-red)' }}>-{totalDeletions}</span>
         </div>
       </div>
 
@@ -347,13 +347,13 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
               {totalAdditions > 0 && (
                 <div style={{
                   flex: totalAdditions / totalChanges,
-                  background: '#3fb950',
+                  background: 'var(--accent-green)',
                 }} />
               )}
               {totalDeletions > 0 && (
                 <div style={{
                   flex: totalDeletions / totalChanges,
-                  background: '#f85149',
+                  background: 'var(--accent-red)',
                 }} />
               )}
             </div>

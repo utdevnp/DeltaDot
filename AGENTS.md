@@ -93,11 +93,56 @@ On launch the app restores the **last active workspace** via `loadActiveWorkspac
 - Summary tab: editable textarea prefilled with the review, **Submit as Comment** posts it signed with the local git user (`\n\n— name <email>`).
 - DeepSeek reasoning models stream `reasoning_content` with empty `content` — `streamAIReview` falls back to reasoning text so the review is never blank.
 
-## Theme (dark / light / system)
+## Design System (vivid, theme-aware)
+
+Tokens live in `src/styles/app.css` — the single source of truth. **Never hardcode hex colors in components**; use `var(--token)` inline or CSS classes.
+
+### Palette (Tailwind-family vivid)
+
+| Token | Dark (`:root`) | Light (`.theme-light`) |
+|-------|----------------|------------------------|
+| `--bg-primary` | `#0a0f1f` | `#fbfdff` |
+| `--bg-secondary` | `#121a33` | `#f1f5fd` |
+| `--bg-tertiary` | `#1c2747` | `#e4ecfa` |
+| `--bg-hover` | `#243259` | `#d6e2f6` |
+| `--border` | `#2d3d66` | `#c6d4ee` |
+| `--border-strong` | `#41589a` | `#9db4dd` |
+| `--text-primary` | `#eef2ff` | `#182338` |
+| `--text-secondary` | `#a9b8e0` | `#55648c` |
+| `--text-dim` | `#64739c` | `#5b6a94` |
+| `--accent-blue` | `#3b82f6` | `#2563eb` |
+| `--accent-green` | `#22c55e` | `#15803d` |
+| `--accent-red` | `#ef4444` | `#dc2626` |
+| `--accent-yellow` | `#f59e0b` | `#b45309` |
+| `--accent-cyan` | `#06b6d4` | `#0891b2` |
+| `--accent-orange` | `#f97316` | `#c2410c` |
+| `--accent-purple` | `#a855f7` | `#9333ea` |
+| `--selection-bg` | `#1d2f5e` | `#dbeafe` |
+| `--btn-blue` / `--btn-blue-dark` | `#2563eb` / `#1d4ed8` | `#1d4ed8` / `#1e40af` |
+| `--btn-green` / `--btn-green-dark` | `#16a34a` / `#15803d` | `#15803d` / `#166534` |
+
+Supporting tokens (defined in both theme blocks):
+- `--tint-{blue,green,red,yellow,purple}` — translucent chip/diff/hover backgrounds (use instead of raw `rgba(...)`)
+- `--border-{blue,green,red,yellow}` — tinted borders for chips/status boxes
+- `--glow-blue`, `--glow-cyan` — glow shadows for accents/status dots
+- `--shadow-pop` — dialog/modal drop shadow
+
+### Rules
+
+1. **Both theme blocks must define every token** — add any new token to `:root` AND `.theme-light` (light-theme accents are deliberately 600/700-level so small text stays ≥ 4.5:1).
+2. No hardcoded hexes in `src/` (except `#fff` label text on `--btn-*`/accent fills, and `color-mix` mix targets).
+3. Primary buttons: `linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))` (green variant uses `--btn-green*`; dark end first for white-label contrast). Hover: `color-mix(in srgb, var(--btn-blue) 88%, #fff)`; `onMouseLeave` restores the exact base gradient string.
+4. Translucent backgrounds: use `--tint-*` tokens or `color-mix(in srgb, var(--accent-x) 12%, transparent)` — never raw `rgba(...)` in components.
+5. Text hierarchy: `--text-primary` (headings/values) > `--text-secondary` (body/meta) > `--text-dim` (labels/hints). Status/diff text uses `--accent-*`.
+6. Selected rows: `linear-gradient(90deg, var(--selection-bg), color-mix(in srgb, var(--selection-bg) 55%, transparent))` + `inset 3px 0 0 var(--accent-blue)`.
+7. Tailwind `@theme` maps every token (`--color-accent-purple`, `--color-bg-hover`, …) so utilities (`bg-bg-secondary`, `text-text-dim`, `light:`) follow the theme automatically.
+
+### Theme mechanics
 
 - Default dark. `toggleTheme` cycles dark → light → system (global only).
 - `effectiveTheme` resolves `system` via `window.matchMedia('(prefers-color-scheme: dark)')`.
-- CSS: `.theme-light` class toggles token values; Tailwind `@theme` maps tokens (`--color-bg-secondary` etc.) so utilities follow the theme. `light:` variant = `.theme-light` selector.
+- CSS: `.theme-light` class on `<html>` toggles token values; `light:` variant = `.theme-light` selector.
+- Theme is global-only; never stored per-workspace.
 
 ## Views & Keyboard Shortcuts (main keydown in App.tsx)
 
@@ -106,7 +151,7 @@ Views: `list` (repos), `commits`, `detail` (commit), `prs`, `prdetail`, `review`
 | Key | Action |
 |-----|--------|
 | `j`/`k` | navigate repos / PRs / commits |
-| `Enter`/`c` | open commit detail / PR detail |
+| `Enter`/`c` | open commit detail / PR detail (PR list: `Enter` opens AI review, same as `r`; mouse click still opens PR detail) |
 | `r` | open AI review for selected PR (PR list) |
 | `o` | open current PR in git (review view) |
 | `s` / `Shift+S` | sync one repo / sync all |

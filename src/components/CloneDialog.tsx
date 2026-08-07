@@ -106,7 +106,7 @@ export function CloneDialog({ workspacePath, onClose, onCloned }: CloneDialogPro
                 flex: 1,
                 padding: '10px 14px',
                 background: 'var(--bg-primary)',
-                border: `1px solid ${status === 'error' ? 'rgba(248,81,73,0.5)' : 'var(--border)'}`,
+                border: `1px solid ${status === 'error' ? 'var(--border-red)' : 'var(--border)'}`,
                 borderRadius: 6,
                 color: 'var(--text-primary)',
                 fontSize: 14,
@@ -120,7 +120,7 @@ export function CloneDialog({ workspacePath, onClose, onCloned }: CloneDialogPro
               style={{
                 padding: '10px 20px',
                 borderRadius: 6,
-                background: status === 'cloning' ? '#1a6db5' : '#238636',
+                background: status === 'cloning' ? 'var(--btn-green-dark)' : 'linear-gradient(135deg, var(--btn-green-dark), var(--btn-green))',
                 border: 'none',
                 color: '#fff',
                 fontSize: 14,
@@ -146,20 +146,20 @@ export function CloneDialog({ workspacePath, onClose, onCloned }: CloneDialogPro
               alignItems: 'center',
               gap: 8,
               background: status === 'error'
-                ? 'rgba(248,81,73,0.1)'
+                ? 'var(--tint-red)'
                 : status === 'done'
-                ? 'rgba(63,185,80,0.1)'
-                : 'rgba(88,166,255,0.1)',
+                ? 'var(--tint-green)'
+                : 'var(--tint-blue)',
               border: status === 'error'
-                ? '1px solid rgba(248,81,73,0.2)'
+                ? '1px solid var(--border-red)'
                 : status === 'done'
-                ? '1px solid rgba(63,185,80,0.2)'
-                : '1px solid rgba(88,166,255,0.2)',
+                ? '1px solid var(--border-green)'
+                : '1px solid var(--border-blue)',
               color: status === 'error'
-                ? '#f85149'
+                ? 'var(--accent-red)'
                 : status === 'done'
-                ? '#3fb950'
-                : '#58a6ff',
+                ? 'var(--accent-green)'
+                : 'var(--accent-blue)',
             }}>
               {status === 'cloning' ? (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>

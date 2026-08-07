@@ -246,7 +246,7 @@ export function AddWorkspaceDialog({
               style={{
                 padding: '8px 24px',
                 borderRadius: 6,
-                background: 'var(--accent-blue)',
+                background: 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))',
                 border: 'none',
                 color: '#fff',
                 fontSize: 13,
@@ -258,10 +258,10 @@ export function AddWorkspaceDialog({
               }}
               disabled={!isEdit && !folder.trim()}
               onMouseEnter={(e) => {
-                if (isEdit || folder.trim()) e.currentTarget.style.background = '#4a90e2';
+                if (isEdit || folder.trim()) e.currentTarget.style.background = 'color-mix(in srgb, var(--btn-blue) 88%, #fff)';
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'var(--accent-blue)';
+                e.currentTarget.style.background = 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))';
               }}
             >
               {isEdit ? 'Save Changes' : 'Add Workspace'}

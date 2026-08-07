@@ -18,8 +18,8 @@ export interface Workspace {
 }
 
 export const WORKSPACE_COLORS = [
-  '#58a6ff', '#3fb950', '#d29922', '#f85149', '#a371f7',
-  '#39d2c0', '#f0883e', '#db61a2', '#768390', '#539bf5',
+  '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7',
+  '#06b6d4', '#f97316', '#ec4899', '#8b5cf6', '#14b8a6',
 ] as const;
 
 export interface AppConfig {

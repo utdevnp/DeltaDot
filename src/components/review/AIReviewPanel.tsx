@@ -30,7 +30,7 @@ const INITIAL_STEPS: Step[] = [
 const compactButtonStyle: React.CSSProperties = {
   padding: '8px 20px',
   borderRadius: 6,
-  background: 'var(--accent-blue)',
+  background: 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))',
   border: 'none',
   color: '#fff',
   fontSize: 13,
@@ -209,8 +209,8 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
             <button
               onClick={runReview}
               style={compactButtonStyle}
-              onMouseEnter={(e) => { e.currentTarget.style.background = '#4a90e2'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent-blue)'; }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--btn-blue) 88%, #fff)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))'; }}
             >
               ▶ Run AI Review
             </button>
@@ -259,8 +259,8 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
                   onClick={runReview}
                   disabled={aiLoading}
                   style={{ ...compactButtonStyle, opacity: aiLoading ? 0.6 : 1, cursor: aiLoading ? 'default' : 'pointer' }}
-                  onMouseEnter={(e) => { if (!aiLoading) e.currentTarget.style.background = '#4a90e2'; }}
-                  onMouseLeave={(e) => { if (!aiLoading) e.currentTarget.style.background = 'var(--accent-blue)'; }}
+                  onMouseEnter={(e) => { if (!aiLoading) e.currentTarget.style.background = 'color-mix(in srgb, var(--btn-blue) 88%, #fff)'; }}
+                  onMouseLeave={(e) => { if (!aiLoading) e.currentTarget.style.background = 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))'; }}
                 >
                   ↻ Run Again
                 </button>
@@ -391,7 +391,7 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
                   style={{
                     padding: '7px 16px',
                     borderRadius: 6,
-                    background: 'var(--accent-green)',
+                    background: 'linear-gradient(135deg, var(--btn-green-dark), var(--btn-green))',
                     border: 'none',
                     color: '#fff',
                     fontSize: 12,
@@ -402,8 +402,8 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
                     flexShrink: 0,
                     transition: 'background 0.15s',
                   }}
-                  onMouseEnter={(e) => { if (!submitting && summary.trim() && !aiLoading) e.currentTarget.style.background = '#2ea043'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent-green)'; }}
+                  onMouseEnter={(e) => { if (!submitting && summary.trim() && !aiLoading) e.currentTarget.style.background = 'color-mix(in srgb, var(--btn-green) 88%, #fff)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'linear-gradient(135deg, var(--btn-green-dark), var(--btn-green))'; }}
                 >
                   {submitting ? 'Posting...' : 'Submit as Comment'}
                 </button>

@@ -23,7 +23,7 @@ function FilterTab({ label, active, onClick }: { label: string; active: boolean;
         padding: '4px 12px',
         borderRadius: 6,
         border: active ? '1px solid var(--accent-blue)' : '1px solid transparent',
-        background: active ? 'rgba(88,166,255,0.1)' : 'transparent',
+        background: active ? 'var(--tint-blue)' : 'transparent',
         color: active ? 'var(--accent-blue)' : 'var(--text-dim)',
         fontSize: 12,
         fontWeight: active ? 600 : 400,
@@ -69,13 +69,13 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
           gap: 16,
           padding: 32,
         }}>
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f85149" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10"/>
             <line x1="12" y1="8" x2="12" y2="12"/>
             <line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
           <div style={{
-            color: '#f85149',
+            color: 'var(--accent-red)',
             fontSize: 14,
             textAlign: 'center',
             lineHeight: 1.6,
@@ -90,16 +90,16 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
                 marginTop: 8,
                 padding: '10px 24px',
                 borderRadius: 8,
-                background: '#21262d',
-                border: '1px solid #30363d',
-                color: '#e6edf3',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)',
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: 'pointer',
                 fontFamily: 'inherit',
               }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#30363d'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#21262d'; }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-tertiary)'; }}
             >
               Open Settings
             </button>
@@ -120,7 +120,7 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
       </div>
       {prs.length === 0 ? (
         <div className="empty-state">
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#484f58" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M18 15h-6"/>
             <path d="M9 9H3"/>
             <path d="M21 9h-6"/>

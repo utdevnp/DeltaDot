@@ -108,7 +108,7 @@ export function WorkspacePanel({
               justifyContent: collapsed ? 'center' : 'flex-start',
             }}
             onMouseEnter={(e) => {
-              if (ws.id !== activeWorkspaceId) e.currentTarget.style.background = 'rgba(88,166,255,0.06)';
+              if (ws.id !== activeWorkspaceId) e.currentTarget.style.background = 'var(--tint-blue)';
             }}
             onMouseLeave={(e) => {
               if (ws.id !== activeWorkspaceId) e.currentTarget.style.background = 'transparent';

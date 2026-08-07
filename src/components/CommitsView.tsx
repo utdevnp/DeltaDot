@@ -94,7 +94,7 @@ export function CommitsView({ repo, selectedCommit, base, release, onSelectCommi
             marginLeft: 'auto',
             padding: '2px 10px',
             borderRadius: 10,
-            background: 'rgba(248,81,73,0.15)',
+            background: 'var(--tint-red)',
             color: 'var(--accent-red)',
             fontSize: 11,
             fontWeight: 600,
@@ -116,7 +116,7 @@ export function CommitsView({ repo, selectedCommit, base, release, onSelectCommi
         }}>
           <div style={{
             padding: '8px 12px',
-            background: 'rgba(248,81,73,0.05)',
+            background: 'var(--tint-red)',
             borderBottom: '1px solid var(--border)',
             fontSize: 11,
             fontWeight: 600,
@@ -165,7 +165,7 @@ export function CommitsView({ repo, selectedCommit, base, release, onSelectCommi
         }}>
           <div style={{
             padding: '8px 12px',
-            background: 'rgba(56,139,253,0.05)',
+            background: 'var(--tint-blue)',
             borderBottom: '1px solid var(--border)',
             fontSize: 11,
             fontWeight: 600,

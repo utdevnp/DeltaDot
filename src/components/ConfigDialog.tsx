@@ -213,9 +213,9 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
         <div style={{
           padding: '12px 16px',
           borderRadius: 6,
-          background: 'rgba(210, 153, 34, 0.1)',
-          border: '1px solid rgba(210, 153, 34, 0.2)',
-          color: '#d29922',
+          background: 'var(--tint-yellow)',
+          border: '1px solid var(--border-yellow)',
+          color: 'var(--accent-yellow)',
           fontSize: 12,
           lineHeight: 1.5,
           marginTop: 8,
@@ -229,8 +229,8 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
         <div style={{
           padding: '12px 16px',
           borderRadius: 6,
-          background: 'rgba(139, 148, 158, 0.1)',
-          border: '1px solid rgba(139, 148, 158, 0.2)',
+          background: 'var(--bg-tertiary)',
+          border: '1px solid var(--border)',
           color: 'var(--text-secondary)',
           fontSize: 12,
           lineHeight: 1.5,
@@ -614,7 +614,7 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
             style={{
               padding: '8px 24px',
               borderRadius: 6,
-              background: saving ? '#1a6db5' : 'var(--accent-blue)',
+              background: saving ? 'var(--btn-blue-dark)' : 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))',
               border: 'none',
               color: '#fff',
               fontSize: 13,
@@ -625,10 +625,10 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
               transition: 'background 0.15s',
             }}
             onMouseEnter={(e) => {
-              if (!saving) e.currentTarget.style.background = '#4a90e2';
+              if (!saving) e.currentTarget.style.background = 'color-mix(in srgb, var(--btn-blue) 88%, #fff)';
             }}
             onMouseLeave={(e) => {
-              if (!saving) e.currentTarget.style.background = 'var(--accent-blue)';
+              if (!saving) e.currentTarget.style.background = 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))';
             }}
           >
             {saving ? 'Saving...' : 'Save & Apply'}
