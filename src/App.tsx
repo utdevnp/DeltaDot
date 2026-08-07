@@ -76,6 +76,8 @@ export function App() {
   const [reviewJira, setReviewJira] = useState<JiraIssue | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState('');
+  // Guards against stale async review/Jira results overwriting a newer review
+  const reviewGenRef = useRef(0);
   // Token-owner GitHub login + local git user name (for comment display)
   const [ownAuthor, setOwnAuthor] = useState('');
   const [gitUserName, setGitUserName] = useState('');
@@ -923,20 +925,29 @@ export function App() {
               if (pr && repos[selectedRepo]) {
                 setPRDetailLoading(true);
                 setPRDetailError('');
-                window.api.fetchPRDetail(
-                  pr.repoName ? '' : (() => { const x = repos[selectedRepo]; return x.name; })(),
-                  pr.repoName ?? repos[selectedRepo]?.name ?? '',
-                  pr.number,
-                  cfg?.provider ?? 'github',
-                  cfg?.token ?? '',
-                ).then((detail) => {
-                  setPRDetail(detail);
-                  setView('prdetail');
+                (async () => {
+                  try {
+                    // Resolve the real owner/repo from the PR's own repo remote
+                    // (PRs may come from another repo in all-repos mode)
+                    const prRepo = pr.repoName ? repos.find((r) => r.name === pr.repoName) : null;
+                    const repo = prRepo ?? repos[selectedRepo];
+                    const remoteInfo = repo ? await window.api.getRemoteOwnerRepo(repo.path) : null;
+                    const owner = remoteInfo?.owner ?? '';
+                    const repoName = pr.repoName || remoteInfo?.repo || repo?.name || '';
+                    const detail = await window.api.fetchPRDetail(
+                      owner,
+                      repoName,
+                      pr.number,
+                      cfg?.provider ?? 'github',
+                      cfg?.token ?? '',
+                    );
+                    setPRDetail(detail);
+                    setView('prdetail');
+                  } catch (err) {
+                    setPRDetailError(err instanceof Error ? err.message : String(err));
+                  }
                   setPRDetailLoading(false);
-                }).catch((err) => {
-                  setPRDetailError(err instanceof Error ? err.message : String(err));
-                  setPRDetailLoading(false);
-                });
+                })();
               }
               break;
             }
@@ -970,8 +981,10 @@ export function App() {
                   returnView: 'prs',
                 });
                 setView('review');
+                const gen = ++reviewGenRef.current;
                 setReviewLoading(true);
                 setReviewError('');
+                setReviewJira(null);
                 // Load Jira + PR detail
                 (async () => {
                   try {
@@ -979,12 +992,12 @@ export function App() {
                     const owner = remoteInfo?.owner ?? '';
                     const prDetail = await window.api.fetchPRDetail(
                       owner,
-                      pr.repoName ?? repo.name,
+                      pr.repoName || repo.name,
                       pr.number,
                       cfg?.provider ?? 'github',
                       cfg?.token ?? '',
                     );
-                    setPRDetail(prDetail);
+                    if (gen === reviewGenRef.current) setPRDetail(prDetail);
                     const jiraConfig = cfg ? { url: cfg.jiraUrl, email: cfg.jiraEmail, apiToken: cfg.jiraApiToken } : null;
                     if (jiraConfig?.url && jiraConfig.email) {
                       const key = await window.api.extractJiraKey(
@@ -993,14 +1006,16 @@ export function App() {
                       if (key) {
                         try {
                           const jira = await window.api.fetchJira(jiraConfig, key);
-                          setReviewJira(jira);
+                          if (gen === reviewGenRef.current) setReviewJira(jira);
                         } catch { /* jira optional */ }
                       }
                     }
-                    setReviewLoading(false);
+                    if (gen === reviewGenRef.current) setReviewLoading(false);
                   } catch (err) {
-                    setReviewError(err instanceof Error ? err.message : String(err));
-                    setReviewLoading(false);
+                    if (gen === reviewGenRef.current) {
+                      setReviewError(err instanceof Error ? err.message : String(err));
+                      setReviewLoading(false);
+                    }
                   }
                 })();
               }
@@ -1027,8 +1042,10 @@ export function App() {
                   returnView: 'prdetail',
                 });
                 setView('review');
+                const gen = ++reviewGenRef.current;
                 setReviewLoading(true);
                 setReviewError('');
+                setReviewJira(null);
                 (async () => {
                   try {
                     const jiraConfig = cfg ? { url: cfg.jiraUrl, email: cfg.jiraEmail, apiToken: cfg.jiraApiToken } : null;
@@ -1039,14 +1056,16 @@ export function App() {
                       if (key) {
                         try {
                           const jira = await window.api.fetchJira(jiraConfig, key);
-                          setReviewJira(jira);
+                          if (gen === reviewGenRef.current) setReviewJira(jira);
                         } catch { /* jira optional */ }
                       }
                     }
-                    setReviewLoading(false);
+                    if (gen === reviewGenRef.current) setReviewLoading(false);
                   } catch (err) {
-                    setReviewError(err instanceof Error ? err.message : String(err));
-                    setReviewLoading(false);
+                    if (gen === reviewGenRef.current) {
+                      setReviewError(err instanceof Error ? err.message : String(err));
+                      setReviewLoading(false);
+                    }
                   }
                 })();
               }
@@ -1268,7 +1287,10 @@ export function App() {
                 returnView: 'prdetail',
               });
               setView('review');
+              const gen = ++reviewGenRef.current;
               setReviewLoading(true);
+              setReviewError('');
+              setReviewJira(null);
               (async () => {
                 try {
                   const jiraConfig = cfg ? { url: cfg.jiraUrl, email: cfg.jiraEmail, apiToken: cfg.jiraApiToken } : null;
@@ -1279,12 +1301,12 @@ export function App() {
                     if (key) {
                       try {
                         const jira = await window.api.fetchJira(jiraConfig, key);
-                        setReviewJira(jira);
+                        if (gen === reviewGenRef.current) setReviewJira(jira);
                       } catch { /* jira optional */ }
                     }
                   }
                 } catch {}
-                setReviewLoading(false);
+                if (gen === reviewGenRef.current) setReviewLoading(false);
               })();
             }}
           />
