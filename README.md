@@ -47,6 +47,30 @@ DeltaDot is not yet code-signed/notarized (requires an Apple Developer account).
 - Right-click the app → **Open** → confirm once, or
 - `xattr -dr com.apple.quarantine /Applications/DeltaDot.app`
 
+## macOS file-permission prompts ("DeltaDot would like to access…")
+
+DeltaDot scans your workspace and runs `git` against every repository. If the workspace is under a TCC-protected location (`~/Documents`, `~/Desktop`, `~/Downloads`, or a network/removable volume), macOS asks for access — and because the app is **ad-hoc signed** (no stable identity), macOS can't remember the answer and keeps re-prompting, which looks like "asks for every repo".
+
+Three ways to fix it:
+
+**A. Full Disk Access (one-time, no rebuild — simplest)**
+System Settings → Privacy & Security → **Full Disk Access** → add `DeltaDot` (enable the toggle). It stops prompting for every folder entirely.
+
+**B. Stable code-signing identity (durable, prompts persist)**
+Give the app a stable identity so macOS remembers "Allow" per location:
+1. Keychain Access → Certificate Assistant → **Create a Certificate** → Name: `DeltaDot Signing`, Identity Type: **Self Signed Root**, Certificate Type: **Code Signing** → Create.
+2. Rebuild, telling the packager to use it:
+   ```sh
+   DELTADOT_SIGNING_IDENTITY="DeltaDot Signing" npm run package
+   ```
+   (Without this, `build/afterPack.cjs` falls back to ad-hoc signing, which is what causes the re-prompting.)
+3. Reinstall on the other Mac — it now asks **once per protected folder** and remembers.
+
+**C. Move the workspace out of a protected folder**
+Put the workspace somewhere macOS doesn't protect (e.g. `~/workspace` or `/Users/Shared`), and local repos stop prompting altogether.
+
+When you get an Apple Developer account, replace B with a real Developer ID certificate + notarization (see below) for the best behavior.
+
 **Building the DMG**: `npm run package` produces a universal DMG (`DeltaDot-1.0.0-universal.dmg`, runs on Intel + Apple Silicon). If the DMG step fails with `Operation not permitted: '/Volumes/DeltaDot/.VolumeIcon.icns'`, the terminal lacks macOS Full Disk Access — grant it (System Settings → Privacy & Security → Full Disk Access) or run `npm run package` from a normal GUI Terminal. The universal ZIP (`DeltaDot-1.0.0-universal-mac.zip`) is produced either way.
 
 **Signing + notarization (when you have an Apple Developer account):**

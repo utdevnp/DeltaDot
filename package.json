@@ -53,7 +53,14 @@
       "identity": null,
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.inherit.plist"
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "extendInfo": {
+        "NSDocumentsFolderUsageDescription": "DeltaDot needs to read the Git repositories in your workspace folder.",
+        "NSDesktopFolderUsageDescription": "DeltaDot needs to read the Git repositories in your workspace folder.",
+        "NSDownloadsFolderUsageDescription": "DeltaDot needs to read the Git repositories in your workspace folder.",
+        "NSRemovableVolumesUsageDescription": "DeltaDot needs to read Git repositories stored on removable volumes.",
+        "NSNetworkVolumesUsageDescription": "DeltaDot needs to read Git repositories stored on network volumes."
+      }
     },
     "dmg": {
       "title": "DeltaDot"

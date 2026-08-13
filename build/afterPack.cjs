@@ -20,12 +20,20 @@ exports.default = async function afterPack(context) {
   const appName = context.packager.appInfo.productFilename;
   const appPath = path.join(context.appOutDir, `${appName}.app`);
 
+  // Sign with a STABLE identity when provided (a self-signed or Developer ID
+  // certificate name) so macOS TCC file-access grants persist across
+  // launches/updates. Falls back to ad-hoc ("-"), which has no stable
+  // identity and causes macOS to re-prompt for file access.
+  const identity = process.env.DELTADOT_SIGNING_IDENTITY || '-';
+
   try {
-    execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], {
+    execFileSync('codesign', ['--force', '--deep', '--sign', identity, appPath], {
       stdio: 'inherit',
     });
-    console.log(`  • ad-hoc re-signed ${appPath}`);
+    console.log(`  • signed ${appPath} with identity "${identity}"`);
   } catch (err) {
-    console.error(`  • ad-hoc re-sign failed: ${err.message}`);
+    // Fail the build rather than ship an unsealed app (macOS would show
+    // "damaged and can't be opened" on other machines).
+    throw new Error(`code signing failed for ${appPath}: ${err.message}`);
   }
 };
