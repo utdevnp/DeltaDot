@@ -36,8 +36,33 @@ npm install
 ```sh
 npm run dev       # Development with HMR
 npm run start     # Production mode
-npm run package   # Build macOS .app + .dmg
+npm run package   # Build macOS .app + .dmg (universal: runs on any Mac)
 ```
+
+## macOS Distribution (unsigned DMG)
+
+DeltaDot is not yet code-signed/notarized (requires an Apple Developer account). The packaged app **runs fine on the machine it was built on**, but Gatekeeper will block it on other Macs with *"cannot be opened because the developer cannot be verified"* / *"is damaged"*.
+
+**Workaround for other Macs** — one of:
+- Right-click the app → **Open** → confirm once, or
+- `xattr -dr com.apple.quarantine /Applications/DeltaDot.app`
+
+**Building the DMG**: `npm run package` produces a universal DMG (`DeltaDot-1.0.0-universal.dmg`, runs on Intel + Apple Silicon). If the DMG step fails with `Operation not permitted: '/Volumes/DeltaDot/.VolumeIcon.icns'`, the terminal lacks macOS Full Disk Access — grant it (System Settings → Privacy & Security → Full Disk Access) or run `npm run package` from a normal GUI Terminal. The universal ZIP (`DeltaDot-1.0.0-universal-mac.zip`) is produced either way.
+
+**Signing + notarization (when you have an Apple Developer account):**
+1. Add a Developer ID Application certificate to the Keychain (identity is auto-detected by electron-builder).
+2. Add notarization to `build.mac` in `package.json`:
+   ```json
+   "notarize": true
+   ```
+3. Export credentials (Apple ID flow):
+   ```sh
+   export APPLE_ID="you@example.com"
+   export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+   export APPLE_TEAM_ID="XXXXXXXXXX"
+   ```
+   or use an App Store Connect API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`).
+4. `npm run package` → produces a fully signed, notarized universal DMG that opens cleanly on any Mac.
 
 ## Keyboard Shortcuts
 
