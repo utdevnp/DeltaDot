@@ -38,6 +38,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "./build/afterPack.cjs",
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
@@ -49,6 +50,7 @@
       ],
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
+      "identity": null,
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist"

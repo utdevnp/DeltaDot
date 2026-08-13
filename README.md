@@ -41,7 +41,7 @@ npm run package   # Build macOS .app + .dmg (universal: runs on any Mac)
 
 ## macOS Distribution (unsigned DMG)
 
-DeltaDot is not yet code-signed/notarized (requires an Apple Developer account). The packaged app **runs fine on the machine it was built on**, but Gatekeeper will block it on other Macs with *"cannot be opened because the developer cannot be verified"* / *"is damaged"*.
+DeltaDot is not yet code-signed/notarized (requires an Apple Developer account). The build **automatically ad-hoc re-signs** the app bundle (`build/afterPack.cjs`) so other Macs show the standard *"unidentified developer"* prompt instead of *"is damaged and can't be opened"*.
 
 **Workaround for other Macs** — one of:
 - Right-click the app → **Open** → confirm once, or
