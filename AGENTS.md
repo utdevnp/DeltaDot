@@ -16,10 +16,34 @@ Guide for AI agents and contributors working on **DeltaDot** — an Electron des
 | `npm run build` | `vite build` (renderer → `dist/`) + `tsc -p tsconfig.node.json` (main → `dist-electron/`) |
 | `npm run build:renderer` | Renderer only |
 | `npm run build:electron` | Main process + core only |
-| `npm run package` | `npm run build` + `electron-builder` (DMG/zip) |
+| `npm run package` | `npm run build` + `electron-builder --universal` (DMG/zip) |
 | `npm run start` | Run the packaged app from `dist-electron` (production) |
+| `DELTADOT_SIGNING_IDENTITY="<cert>" npm run package` | Build signed with a stable code-signing identity (see Packaging section) |
+| `bash build/create-signing-cert.sh` | One-time: create + import a self-signed Code Signing cert |
 
 There is **no test suite and no lint script** yet (see ROADMAP).
+
+## macOS Packaging & Distribution
+
+`npm run package` = `npm run build && electron-builder --universal` — produces a **universal** (arm64 + x86_64) `.dmg` + `.zip` that runs on every Mac. The packaged app ships **no `node_modules`**: all build-time packages (`@rolldown/binding-darwin-arm64`, `@tailwindcss/vite`, `tailwindcss`, `react`, `react-dom`) are in `devDependencies`; the main process imports only Node built-ins + `electron`, and the renderer is fully bundled into `dist/`.
+
+### Code signing (critical)
+
+- `mac.identity` is **`null`** — electron-builder skips its own signing; `build/afterPack.cjs` re-signs the final merged `.app` (it skips the `*-x64-temp` / `*-arm64-temp` per-arch dirs so the universal merge stays consistent).
+- Signing identity comes from env `DELTADOT_SIGNING_IDENTITY` (a stable cert name) and falls back to ad-hoc `-`. Signing failure **throws** — an unsealed app is never shipped silently.
+- `mac.hardenedRuntime: true` + `build/entitlements.mac.plist` / `build/entitlements.mac.inherit.plist` (JIT / unsigned-executable-memory entitlements).
+- `mac.extendInfo` sets the TCC usage descriptions (`NSDocumentsFolderUsageDescription`, `NSDesktopFolderUsageDescription`, `NSDownloadsFolderUsageDescription`, `NSRemovableVolumesUsageDescription`, `NSNetworkVolumesUsageDescription`).
+- `build/create-signing-cert.sh` — one-time helper that creates a self-signed **Code Signing** cert (`openssl pkcs12 -legacy` for OpenSSL 3.x compatibility) and imports it into the login keychain.
+
+### Known macOS behaviors (why the above exists)
+
+- **"DeltaDot is damaged and can't be opened"** = the bundle signature is unsealed. The `afterPack` re-sign fixes it; verify with `codesign --verify --deep --strict <path>.app`.
+- **"would like to access files…" for every repo** = macOS TCC prompts + unstable (ad-hoc) app identity so grants are not remembered. Fixes, in order of effort:
+  1. **Full Disk Access** for the app (System Settings → Privacy & Security) — one-time, stops all prompts.
+  2. **Stable identity** — `bash build/create-signing-cert.sh` once, then `DELTADOT_SIGNING_IDENTITY="DeltaDot Signing" npm run package`. Grants now persist; it asks once per protected folder (Documents/Desktop/Downloads/network/removable), not per repo.
+  3. Move the workspace out of protected folders (`~/workspace`, `/Users/Shared`) — local repos stop prompting entirely.
+- **DMG step fails with `Operation not permitted: /Volumes/DeltaDot/.VolumeIcon.icns`** = the terminal lacks macOS Full Disk Access; run `npm run package` from a normal GUI Terminal (the `.zip` target builds regardless).
+- No Apple Developer account yet → app is **not notarized**. On other Macs the first launch needs right-click → Open, or `xattr -dr com.apple.quarantine /Applications/DeltaDot.app`. When an account exists: add `"notarize": true` under `build.mac` and export `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` (or the App Store Connect API-key envs).
 
 ## Architecture
 
