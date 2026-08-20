@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { homedir } from 'os';
-import type { AppConfig, RepoState, CacheFile, Provider, CommitDetail, PR, PRDetail, JiraIssue, Workspace } from '../core/types.js';
+import type { AppConfig, RepoState, CacheFile, Provider, CommitDetail, PR, PRDetail, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceList } from '../core/types.js';
 
 export interface DeltaDotAPI {
   homeDir: string;
@@ -46,6 +46,13 @@ export interface DeltaDotAPI {
   activateWorkspace: (id: string) => Promise<AppConfig>;
   saveWorkspaceConfig: (id: string, config: AppConfig) => Promise<void>;
   saveWorkspaces: (wsList: Workspace[]) => Promise<void>;
+  k8sContexts: () => Promise<KubeContext[]>;
+  k8sNamespaces: (contextName: string) => Promise<string[]>;
+  k8sDeployments: (contextName: string, namespace: string) => Promise<KubeDeploymentSummary[]>;
+  k8sDeploymentDetail: (contextName: string, namespace: string, name: string) => Promise<KubeDeploymentDetail>;
+  k8sResources: (contextName: string, namespace: string, kind: string) => Promise<KubeResourceList>;
+  loadKubeContext: () => Promise<string | null>;
+  saveKubeContext: (contextName: string) => Promise<void>;
 }
 
 const api: DeltaDotAPI = {
@@ -107,6 +114,13 @@ const api: DeltaDotAPI = {
   activateWorkspace: (id) => ipcRenderer.invoke('activate-workspace', id),
   saveWorkspaceConfig: (id, config) => ipcRenderer.invoke('save-workspace-config', id, config),
   saveWorkspaces: (wsList) => ipcRenderer.invoke('save-workspaces', wsList),
+  k8sContexts: () => ipcRenderer.invoke('k8s-contexts'),
+  k8sNamespaces: (contextName) => ipcRenderer.invoke('k8s-namespaces', contextName),
+  k8sDeployments: (contextName, namespace) => ipcRenderer.invoke('k8s-deployments', contextName, namespace),
+  k8sDeploymentDetail: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-detail', contextName, namespace, name),
+  k8sResources: (contextName, namespace, kind) => ipcRenderer.invoke('k8s-resources', contextName, namespace, kind),
+  loadKubeContext: () => ipcRenderer.invoke('load-kube-context'),
+  saveKubeContext: (contextName) => ipcRenderer.invoke('save-kube-context', contextName),
 };
 
 contextBridge.exposeInMainWorld('api', api);

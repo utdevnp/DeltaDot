@@ -78,6 +78,20 @@ export async function saveActiveWorkspaceId(id: string): Promise<void> {
   } catch { /* non-fatal */ }
 }
 
+export async function loadKubeContext(): Promise<string | null> {
+  try {
+    const raw = await readFile(join(dataDir(), 'kube-context'), 'utf8');
+    return raw.trim() || null;
+  } catch { return null; }
+}
+
+export async function saveKubeContext(contextName: string): Promise<void> {
+  try {
+    await mkdir(dataDir(), { recursive: true });
+    await writeFile(join(dataDir(), 'kube-context'), contextName, 'utf8');
+  } catch { /* non-fatal */ }
+}
+
 export function cachePath(workspacePath: string): string {
   return join(workspacePath, '.deltadot-cache.json');
 }

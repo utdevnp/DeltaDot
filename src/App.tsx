@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace } from '../core/types.js';
+import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, KubeContext, KubeDeploymentSummary, KubeContextTab, KubeWorkloadTab, KubeCompareTab } from '../core/types.js';
 import { getVisibleConfigFields, WORKSPACE_COLORS } from '../core/types.js';
 import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
@@ -11,6 +11,7 @@ import { ConfigDialog } from './components/ConfigDialog';
 import { PRsView } from './components/PRsView';
 import { PRDetailView } from './components/PRDetailView';
 import { ReviewView } from './components/ReviewView';
+import { K8sView } from './components/K8sView';
 import { CommandBar } from './components/CommandBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { WorkspacePanel } from './components/WorkspacePanel';
@@ -81,6 +82,14 @@ export function App() {
   // Token-owner GitHub login + local git user name (for comment display)
   const [ownAuthor, setOwnAuthor] = useState('');
   const [gitUserName, setGitUserName] = useState('');
+
+  // Kubernetes state
+  const [kubeContexts, setKubeContexts] = useState<KubeContext[]>([]);
+  const [kubeContextTabs, setKubeContextTabs] = useState<KubeContextTab[]>([]);
+  const [kubeWorkloadTabs, setKubeWorkloadTabs] = useState<KubeWorkloadTab[]>([]);
+  const [kubeActiveTab, setKubeActiveTab] = useState(''); // '' | 'compare' | context/workload tab id
+  const [kubeCompareTab, setKubeCompareTab] = useState<KubeCompareTab | null>(null);
+  const [kubeError, setKubeError] = useState('');
 
   // Recognize which GitHub account the token belongs to
   useEffect(() => {
@@ -316,23 +325,33 @@ export function App() {
     } catch { /* non-fatal */ }
   }, []);
 
-  const handleChangeView = useCallback(async (newView: 'list' | 'prs') => {
+  const handleChangeView = useCallback(async (newView: 'list' | 'prs' | 'k8s') => {
     setView(newView);
-    if (cfg) {
-      const updatedCfg = { ...cfg, defaultView: newView };
-      setCfg(updatedCfg);
-      if (activeWorkspaceId) {
-        await window.api.saveWorkspaceConfig(activeWorkspaceId, updatedCfg);
-      } else {
-        await window.api.saveConfig(updatedCfg);
+    if (newView !== 'k8s') {
+      if (cfg) {
+        const updatedCfg = { ...cfg, defaultView: newView };
+        setCfg(updatedCfg);
+        if (activeWorkspaceId) {
+          await window.api.saveWorkspaceConfig(activeWorkspaceId, updatedCfg);
+        } else {
+          await window.api.saveConfig(updatedCfg);
+        }
       }
+      // Auto-fetch PRs when switching to PR view
+      if (newView === 'prs' && repos.length > 0 && cfg?.token) {
+        setPRError('');
+        fetchAllPRsRef.current();
+      }
+      return;
     }
-    // Auto-fetch PRs when switching to PR view
-    if (newView === 'prs' && repos.length > 0 && cfg?.token) {
-      setPRError('');
-      fetchAllPRsRef.current();
+    // Kubernetes view — load contexts on first entry, otherwise show the first context tab
+    setKubeError('');
+    if (kubeContextTabsRef.current.length === 0) {
+      loadKubeContextsRef.current();
+    } else {
+      setKubeActiveTab(kubeContextTabsRef.current[0]!.id);
     }
-  }, [cfg, activeWorkspaceId, repos]);
+  }, [cfg, activeWorkspaceId, repos, kubeContextTabs.length]);
 
   // ─── Workspace Selection ──────────────────────────────────────────────────
 
@@ -684,6 +703,227 @@ export function App() {
     setPRLoading(false);
   }, [cfg, repos, prFilter]);
 
+  // ─── Kubernetes ─────────────────────────────────────────────────────────
+
+  // Create a context tab (fetch its namespaces + deployments); activates it when asked.
+  const createKubeContextTab = useCallback(async (ctxName: string, activate: boolean) => {
+    const existing = kubeContextTabsRef.current.find((t) => t.id === ctxName);
+    if (existing) {
+      if (activate) setKubeActiveTab(ctxName);
+      return;
+    }
+    const nsList = await window.api.k8sNamespaces(ctxName).catch(() => []);
+    const ctxObj = kubeContextsRef.current.find((c) => c.name === ctxName);
+    const defaultNs = ctxObj?.namespace || 'default';
+    const tab: KubeContextTab = {
+      id: ctxName, context: ctxName, namespace: defaultNs, namespaces: nsList,
+      kind: 'deployments', resources: { kind: 'deployments', columns: [], items: [] },
+      selected: 0, loading: true, error: '',
+    };
+    setKubeContextTabs((prev) => [...prev, tab]);
+    if (activate) setKubeActiveTab(ctxName);
+    try {
+      const res = await window.api.k8sResources(ctxName, defaultNs, 'deployments');
+      setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, resources: res, loading: false } : t));
+    } catch (err) {
+      setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
+
+  // First entry: build the first context tab from the LAST selected context
+  // (remembered across launches), falling back to the kubeconfig current context.
+  const loadKubeContexts = useCallback(async () => {
+    setKubeError('');
+    try {
+      const ctxs = await window.api.k8sContexts();
+      setKubeContexts(ctxs);
+      if (ctxs.length === 0) {
+        setKubeError('No Kubernetes contexts found in your kubeconfig (~/.kube/config). Add a cluster and try again.');
+        return;
+      }
+      const saved = await window.api.loadKubeContext().catch(() => null);
+      const start = ctxs.find((c) => c.name === saved) ?? ctxs.find((c) => c.current) ?? ctxs[0]!;
+      await createKubeContextTab(start.name, true);
+    } catch (err) {
+      setKubeError(err instanceof Error ? err.message : String(err));
+    }
+  }, [createKubeContextTab]);
+
+  // Open (or activate) a context in its own tab; remember it as the last selected context.
+  const openKubeContextTab = useCallback(async (ctxName: string) => {
+    await createKubeContextTab(ctxName, true);
+    window.api.saveKubeContext(ctxName);
+  }, [createKubeContextTab]);
+
+  // Change the namespace of a context tab and reload its current resource list.
+  const handleKubeTabNamespaceChange = useCallback(async (tabId: string, ns: string) => {
+    const kind = kubeContextTabsRef.current.find((t) => t.id === tabId)?.kind ?? 'deployments';
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, namespace: ns, loading: true, error: '' } : t));
+    try {
+      const res = await window.api.k8sResources(tabId, ns, kind);
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: res, selected: 0, loading: false } : t));
+    } catch (err) {
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: { kind, columns: [], items: [] }, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
+
+  // Switch the resource kind of a context tab (deployments → pods → configmaps …).
+  const handleKubeTabKindChange = useCallback(async (tabId: string, kind: string) => {
+    const ns = kubeContextTabsRef.current.find((t) => t.id === tabId)?.namespace ?? 'default';
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, kind, loading: true, error: '' } : t));
+    try {
+      const res = await window.api.k8sResources(tabId, ns, kind);
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: res, selected: 0, loading: false } : t));
+    } catch (err) {
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: { kind, columns: [], items: [] }, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
+
+  const refreshKubeTab = useCallback((tabId: string) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === tabId);
+    if (tab) handleKubeTabNamespaceChange(tabId, tab.namespace);
+  }, [handleKubeTabNamespaceChange]);
+
+  // Select a resource row inside the active context tab.
+  const selectKubeDeployment = useCallback((i: number) => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, selected: i } : t));
+  }, []);
+
+  // Open a deployment in its own workload tab (reuses the tab if already open).
+  const openKubeWorkload = useCallback(async (i: number) => {
+    const tab = kubeContextTabs.find((t) => t.id === kubeActiveTab) ?? kubeContextTabs[0];
+    const row = tab?.resources.items[i];
+    if (!tab || !row || tab.kind !== 'deployments') return;
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, selected: i } : t));
+    const id = `${row.namespace}/${row.name}`;
+    const existing = kubeWorkloadTabs.find((t) => t.id === id);
+    if (existing) {
+      setKubeActiveTab(id);
+      return;
+    }
+    const newTab: KubeWorkloadTab = { id, name: row.name, namespace: row.namespace, detail: null, loading: true };
+    setKubeWorkloadTabs((prev) => [...prev, newTab]);
+    setKubeActiveTab(id);
+    try {
+      const detail = await window.api.k8sDeploymentDetail(tab.context, row.namespace, row.name);
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, detail, loading: false } : t));
+    } catch (err) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, [kubeActiveTab, kubeContextTabs, kubeWorkloadTabs]);
+
+  // Tab-by-tab compare: right-click a context tab → pick another context →
+  // new compare tab; deployments are fetched for both contexts in the source
+  // tab's namespace.
+  const openKubeContextCompare = useCallback(async (sourceCtx: string, otherCtx: string) => {
+    if (!sourceCtx || otherCtx === sourceCtx) return;
+    const sourceTab = kubeContextTabs.find((t) => t.context === sourceCtx) ?? kubeContextTabs.find((t) => t.id === kubeActiveTab) ?? kubeContextTabs[0];
+    if (!sourceTab) return;
+    const ns = sourceTab.namespace;
+    setKubeCompareTab({
+      sides: [
+        { context: sourceTab.context, label: sourceTab.label, deployments: [], loaded: false },
+        { context: otherCtx, deployments: [], loaded: false },
+      ],
+      namespace: ns,
+      loading: true,
+      error: '',
+    });
+    setKubeActiveTab('compare');
+    try {
+      const [d1, d2] = await Promise.all([
+        window.api.k8sDeployments(sourceCtx, ns),
+        window.api.k8sDeployments(otherCtx, ns),
+      ]);
+      setKubeCompareTab((prev) => prev ? {
+        ...prev,
+        sides: [
+          { ...prev.sides[0]!, deployments: d1, loaded: true },
+          { ...prev.sides[1]!, deployments: d2, loaded: true },
+        ],
+        loading: false,
+      } : prev);
+    } catch (err) {
+      setKubeCompareTab((prev) => prev ? { ...prev, loading: false, error: err instanceof Error ? err.message : String(err) } : prev);
+    }
+  }, [kubeActiveTab, kubeContextTabs]);
+
+  // Append another context column to the compare table.
+  const addKubeCompareContext = useCallback(async (ctx: string) => {
+    const tab = kubeCompareTabRef.current;
+    if (!tab || tab.sides.some((s) => s.context === ctx)) return;
+    const openTab = kubeContextTabsRef.current.find((t) => t.context === ctx);
+    setKubeCompareTab({ ...tab, sides: [...tab.sides, { context: ctx, label: openTab?.label, deployments: [], loaded: false }], loading: true, error: '' });
+    try {
+      const deps = await window.api.k8sDeployments(ctx, tab.namespace);
+      setKubeCompareTab((prev) => prev ? {
+        ...prev,
+        sides: prev.sides.map((s, i) => i === prev.sides.length - 1 ? { ...s, deployments: deps, loaded: true } : s),
+        loading: false,
+      } : prev);
+    } catch (err) {
+      setKubeCompareTab((prev) => prev ? { ...prev, loading: false, error: err instanceof Error ? err.message : String(err) } : prev);
+    }
+  }, []);
+
+  // Remove a context column from the compare table (keep at least 2).
+  const removeKubeCompareSide = useCallback((index: number) => {
+    setKubeCompareTab((prev) => {
+      if (!prev || prev.sides.length <= 2) return prev;
+      return { ...prev, sides: prev.sides.filter((_, i) => i !== index) };
+    });
+  }, []);
+
+  // Rename a tab (context, workload or compare) via double-click.
+  const renameKubeTab = useCallback((id: string, label: string) => {
+    const trimmed = label.trim();
+    if (id === 'compare') {
+      setKubeCompareTab((prev) => prev ? { ...prev, label: trimmed || undefined } : prev);
+      return;
+    }
+    const next = trimmed || undefined;
+    setKubeContextTabs((prev) => prev.some((t) => t.id === id) ? prev.map((t) => t.id === id ? { ...t, label: next } : t) : prev);
+    setKubeWorkloadTabs((prev) => prev.some((t) => t.id === id) ? prev.map((t) => t.id === id ? { ...t, label: next } : t) : prev);
+  }, []);
+
+  const activateKubeTab = useCallback((id: string) => {
+    setKubeActiveTab(id);
+    // Remember the last selected context across launches.
+    if (id !== 'compare' && kubeContextTabsRef.current.some((t) => t.id === id)) {
+      window.api.saveKubeContext(id);
+    }
+  }, []);
+
+  const closeKubeTab = useCallback((id: string) => {
+    const fallbackId = () => kubeContextTabs[0]?.id ?? '';
+    if (id === 'compare') {
+      setKubeCompareTab(null);
+      if (kubeActiveTab === 'compare') setKubeActiveTab(fallbackId());
+      return;
+    }
+    if (kubeWorkloadTabs.some((t) => t.id === id)) {
+      setKubeWorkloadTabs((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        if (kubeActiveTab === id) setKubeActiveTab(fallbackId());
+        return next;
+      });
+      return;
+    }
+    // Context tab — keep at least one open.
+    setKubeContextTabs((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((t) => t.id !== id);
+      if (kubeActiveTab === id) setKubeActiveTab(next[0]!.id);
+      return next;
+    });
+  }, [kubeActiveTab, kubeWorkloadTabs, kubeContextTabs]);
+
+  const closeActiveKubeTab = useCallback(() => {
+    if (kubeActiveTab === 'compare') closeKubeTab('compare');
+    else if (kubeWorkloadTabs.some((t) => t.id === kubeActiveTab)) closeKubeTab(kubeActiveTab);
+    else setView('list'); // context tab or empty state → back to repos
+  }, [kubeActiveTab, kubeWorkloadTabs, closeKubeTab]);
+
   // ─── Keyboard Handler ────────────────────────────────────────────────────
 
   const showStatusRef = useRef(showStatus);
@@ -706,6 +946,22 @@ export function App() {
   cfgRef.current = cfg;
   const reposRef = useRef(repos);
   reposRef.current = repos;
+  const kubeContextsRef = useRef(kubeContexts);
+  kubeContextsRef.current = kubeContexts;
+  const kubeContextTabsRef = useRef(kubeContextTabs);
+  kubeContextTabsRef.current = kubeContextTabs;
+  const kubeActiveTabRef = useRef(kubeActiveTab);
+  kubeActiveTabRef.current = kubeActiveTab;
+  const loadKubeContextsRef = useRef(loadKubeContexts);
+  loadKubeContextsRef.current = loadKubeContexts;
+  const openKubeWorkloadRef = useRef(openKubeWorkload);
+  openKubeWorkloadRef.current = openKubeWorkload;
+  const kubeCompareTabRef = useRef(kubeCompareTab);
+  kubeCompareTabRef.current = kubeCompareTab;
+  const refreshKubeTabRef = useRef(refreshKubeTab);
+  refreshKubeTabRef.current = refreshKubeTab;
+  const closeActiveKubeTabRef = useRef(closeActiveKubeTab);
+  closeActiveKubeTabRef.current = closeActiveKubeTab;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -819,6 +1075,16 @@ export function App() {
                 setPRError('');
                 setPrAllRepos(true);
                 fetchAllPRsRef.current();
+              }
+              break;
+            }
+            case 'K': {
+              setView('k8s');
+              setKubeError('');
+              if (kubeContextTabsRef.current.length === 0) {
+                loadKubeContextsRef.current();
+              } else {
+                setKubeActiveTab(kubeContextTabsRef.current[0]!.id);
               }
               break;
             }
@@ -1078,12 +1344,50 @@ export function App() {
           }
           break;
         }
+        case 'k8s': {
+          const ctxTab = kubeContextTabs.find((t) => t.id === kubeActiveTab) ?? kubeContextTabs[0];
+          const onContextList = !!ctxTab && kubeActiveTab !== 'compare' && !kubeWorkloadTabs.some((t) => t.id === kubeActiveTab);
+          switch (e.key) {
+            case 'j': case 'ArrowDown':
+              if (!onContextList) break;
+              e.preventDefault();
+              selectKubeDeployment(Math.min(ctxTab.selected + 1, ctxTab.resources.items.length - 1));
+              break;
+            case 'k': case 'ArrowUp':
+              if (!onContextList) break;
+              e.preventDefault();
+              selectKubeDeployment(Math.max(ctxTab.selected - 1, 0));
+              break;
+            case 'g':
+              if (!e.shiftKey && onContextList) selectKubeDeployment(0);
+              break;
+            case 'G':
+              if (onContextList) selectKubeDeployment(ctxTab.resources.items.length - 1);
+              break;
+            case 'Enter':
+              e.preventDefault();
+              if (onContextList && ctxTab.resources.items[ctxTab.selected]) {
+                openKubeWorkloadRef.current(ctxTab.selected);
+              }
+              break;
+            case 'r':
+              if (ctxTab) refreshKubeTabRef.current(ctxTab.id);
+              break;
+            case 'b': case 'Escape':
+              closeActiveKubeTabRef.current();
+              break;
+            case 'q':
+              window.api.getAppInfo().then(() => window.close());
+              break;
+          }
+          break;
+        }
       }
     };
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext]);
+  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext, kubeContexts, kubeContextTabs, kubeWorkloadTabs, kubeActiveTab, selectKubeDeployment]);
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
@@ -1296,6 +1600,30 @@ export function App() {
             onBack={() => { setView(reviewContext.returnView); setReviewJira(null); }}
           />
         );
+      case 'k8s':
+        return (
+          <K8sView
+            contexts={kubeContexts}
+            contextTabs={kubeContextTabs}
+            activeTab={kubeActiveTab}
+            workloadTabs={kubeWorkloadTabs}
+            compareTab={kubeCompareTab}
+            error={kubeError}
+            onOpenContextTab={openKubeContextTab}
+            onTabNamespaceChange={handleKubeTabNamespaceChange}
+            onTabKindChange={handleKubeTabKindChange}
+            onRefreshTab={refreshKubeTab}
+            onSelect={selectKubeDeployment}
+            onOpenWorkload={openKubeWorkload}
+            onCompareContext={openKubeContextCompare}
+            onAddCompareContext={addKubeCompareContext}
+            onRemoveCompareSide={removeKubeCompareSide}
+            onActivateTab={activateKubeTab}
+            onCloseTab={closeKubeTab}
+            onRenameTab={renameKubeTab}
+            onBack={closeActiveKubeTab}
+          />
+        );
       default:
         return null;
     }
@@ -1313,7 +1641,7 @@ export function App() {
             isSyncing={isSyncing}
             syncProgress={syncProgress}
             lastSync={lastSync}
-            currentView={view === 'prs' ? 'prs' : 'list'}
+            currentView={view === 'prs' ? 'prs' : view === 'k8s' ? 'k8s' : 'list'}
             onSyncAll={syncAll}
             onSelectWorkspace={selectWorkspace}
             onOpenConfig={() => setShowConfig(true)}

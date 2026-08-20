@@ -1,7 +1,7 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type RepoStatus = 'loading' | 'stale' | 'syncing' | 'synced' | 'behind' | 'error';
-export type View = 'list' | 'commits' | 'detail' | 'config' | 'prs' | 'prdetail' | 'review';
+export type View = 'list' | 'commits' | 'detail' | 'config' | 'prs' | 'prdetail' | 'review' | 'k8s';
 export type InputMode = 'none' | 'search' | 'command';
 export type Provider = 'github' | 'gitlab' | 'bitbucket';
 export type TaskProvider = 'none' | 'jira' | 'clickup' | 'github';
@@ -221,3 +221,172 @@ export const CONFIG_LABELS: Record<ConfigField, string> = {
   aiSystemPrompt: 'AI System Prompt',
   theme: 'Theme',
 };
+
+// ─── Kubernetes ──────────────────────────────────────────────────────────────
+
+export interface KubeContext {
+  name: string;
+  cluster: string;
+  namespace: string; // default namespace from the kubeconfig context (may be empty)
+  current: boolean;
+}
+
+export interface KubeDeploymentSummary {
+  name: string;
+  namespace: string;
+  image: string; // primary (first) container image
+  replicas: number;
+  ready: number;
+  available: number;
+  updated: number;
+  strategy: string;
+  createdAt: string; // ISO timestamp
+  lastUpdated: string; // newest status-condition update time (ISO), '' when unknown
+}
+
+export interface KubeContainerPort {
+  name?: string;
+  containerPort: number;
+  protocol?: string;
+}
+
+export interface KubeEnvVar {
+  name: string;
+  value?: string;
+  valueFrom?: string; // human-readable source, e.g. "secretRef:my-secret/KEY"
+}
+
+export interface KubeResourceSpec {
+  requests?: Record<string, string>;
+  limits?: Record<string, string>;
+}
+
+export interface KubeProbe {
+  type: string;
+  detail: string; // human-readable probe definition
+  initialDelaySeconds?: number;
+  periodSeconds?: number;
+}
+
+export interface KubeContainer {
+  name: string;
+  image: string;
+  imagePullPolicy?: string;
+  ports: KubeContainerPort[];
+  env: KubeEnvVar[];
+  resources?: KubeResourceSpec;
+  command?: string[];
+  args?: string[];
+  livenessProbe?: KubeProbe | null;
+  readinessProbe?: KubeProbe | null;
+  startupProbe?: KubeProbe | null;
+}
+
+export interface KubeDeploymentDetail {
+  name: string;
+  namespace: string;
+  createdAt: string;
+  labels: Record<string, string>;
+  annotations: Record<string, string>;
+  replicas: number;
+  ready: number;
+  available: number;
+  updated: number;
+  strategyType: string;
+  maxSurge?: string;
+  maxUnavailable?: string;
+  selector: Record<string, string>;
+  containers: KubeContainer[];
+  conditions: { type: string; status: string; reason?: string }[];
+}
+
+// ─── Kubernetes comparison (pure, renderer-safe) ────────────────────────────
+
+export type KubeDiffStatus = 'same' | 'changed' | 'left-only' | 'right-only';
+
+export interface KubeDiffRow {
+  key: string;
+  label: string;
+  left?: string;
+  right?: string;
+  status: KubeDiffStatus;
+}
+
+export interface KubeDiffSection {
+  title: string;
+  rows: KubeDiffRow[];
+}
+
+// ─── Kubernetes tabs (renderer state) ───────────────────────────────────────
+
+export interface KubeWorkloadTab {
+  id: string; // `${namespace}/${name}`
+  name: string;
+  namespace: string;
+  label?: string; // custom tab label (rename), defaults to `${namespace}/${name}`
+  detail: KubeDeploymentDetail | null;
+  loading: boolean;
+  error?: string;
+}
+
+export interface KubeCompareSide {
+  context: string; // kube context name (dynamic column label)
+  label?: string; // tab label when the context is open as a renamed tab
+  deployments: KubeDeploymentSummary[]; // deployments in the compared namespace
+  loaded: boolean;
+}
+
+export interface KubeCompareTab {
+  sides: KubeCompareSide[]; // >= 2 contexts being compared
+  namespace: string; // namespace the comparison ran in
+  label?: string; // custom tab label (rename), defaults to "ctxA vs ctxB"
+  loading: boolean;
+  error: string;
+}
+
+export interface KubeContextTab {
+  id: string; // context name (stable tab id)
+  context: string;
+  label?: string; // custom tab label (rename), defaults to the context name
+  namespace: string; // current namespace shown in this tab
+  namespaces: string[]; // namespaces available in this context
+  kind: string; // selected resource kind id (deployments, pods, configmaps, …)
+  resources: KubeResourceList; // table for the selected kind in the current namespace
+  selected: number;
+  loading: boolean;
+  error: string;
+}
+
+// ─── Kubernetes generic resource tables (renderer-safe) ─────────────────────
+
+export interface KubeResourceColumn {
+  key: string;
+  label: string;
+  format?: 'text' | 'age' | 'ready' | 'image';
+}
+
+export interface KubeResourceItem {
+  key: string; // unique within the list (namespace/name)
+  name: string;
+  namespace: string;
+  cells: Record<string, string>;
+}
+
+export interface KubeResourceList {
+  kind: string;
+  columns: KubeResourceColumn[];
+  items: KubeResourceItem[];
+}
+
+export const KUBE_RESOURCE_OPTIONS: { id: string; label: string }[] = [
+  { id: 'deployments', label: 'Deployments' },
+  { id: 'pods', label: 'Pods' },
+  { id: 'configmaps', label: 'ConfigMaps' },
+  { id: 'secrets', label: 'Secrets' },
+  { id: 'services', label: 'Services' },
+  { id: 'statefulsets', label: 'StatefulSets' },
+  { id: 'daemonsets', label: 'DaemonSets' },
+  { id: 'ingresses', label: 'Ingresses' },
+  { id: 'jobs', label: 'Jobs' },
+  { id: 'cronjobs', label: 'CronJobs' },
+];

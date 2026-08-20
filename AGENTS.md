@@ -25,7 +25,7 @@ There is **no test suite and no lint script** yet (see ROADMAP).
 
 ## macOS Packaging & Distribution
 
-`npm run package` = `npm run build && electron-builder --universal` — produces a **universal** (arm64 + x86_64) `.dmg` + `.zip` that runs on every Mac. The packaged app ships **no `node_modules`**: all build-time packages (`@rolldown/binding-darwin-arm64`, `@tailwindcss/vite`, `tailwindcss`, `react`, `react-dom`) are in `devDependencies`; the main process imports only Node built-ins + `electron`, and the renderer is fully bundled into `dist/`.
+`npm run package` = `npm run build && electron-builder --universal` — produces a **universal** (arm64 + x86_64) `.dmg` + `.zip` that runs on every Mac. The packaged app ships one runtime dependency only: **`@kubernetes/client-node`** (in `dependencies`, pulled into the asar by electron-builder) — everything else is build-time in `devDependencies` (`@rolldown/binding-darwin-arm64`, `@tailwindcss/vite`, `tailwindcss`, `react`, `react-dom`). The main process imports Node built-ins + `electron` + `@kubernetes/client-node`; the renderer is fully bundled into `dist/`.
 
 ### Code signing (critical)
 
@@ -62,6 +62,8 @@ core/                     → Node-side logic compiled into dist-electron (main 
   config.ts               → ~/.deltadot files (global config, workspaces, cache, active id)
   pr.ts                   → remote owner/repo parsing, PR fetch/comment wrappers
   remote.ts               → getRemoteUrl (lazy git), openInBrowser       ⚠ Node-only
+  k8s.ts                  → getKubeContexts/Namespaces/Deployments/DeploymentDetail via @kubernetes/client-node (reads ~/.kube/config)  ⚠ Node-only
+  k8s-compare.ts          → compareDeployments (pure diff sections)      ✅ renderer-safe
   urls.ts                 → PURE URL helpers (parseRemoteUrl, getPRsUrl…) ✅ renderer-safe
   markdown.ts             → renderMarkdown (pure) ✅ renderer-safe
   utils.ts                → timeAgo, statusIcon, etc. ✅ renderer-safe
@@ -74,10 +76,10 @@ core/                     → Node-side logic compiled into dist-electron (main 
 
 ### Critical rule — keep Node built-ins out of the renderer
 
-The renderer must **never** import modules that pull in Node built-ins (`child_process`, `fs`, `path`). Vite externalizes them and the app crashes with a blank window (`Module "child_process" has been externalized…`).
+The renderer must **never** import modules that pull in Node built-ins (`child_process`, `fs`, `path`) or the k8s client (`@kubernetes/client-node`). Vite externalizes them and the app crashes with a blank window (`Module "child_process" has been externalized…`).
 
-- ✅ Renderer may import: `core/types.js`, `core/urls.js`, `core/markdown.js`, `core/utils.js`
-- ⚠️ Never import `core/git.js`, `core/remote.ts`'s git path, or `core/pr.js` from renderer code. If the renderer needs a pure helper, put it in `core/urls.ts` (or another pure module).
+- ✅ Renderer may import: `core/types.js`, `core/urls.js`, `core/markdown.js`, `core/utils.js`, `core/k8s-compare.js` (pure)
+- ⚠️ Never import `core/git.js`, `core/remote.ts`'s git path, `core/pr.js`, or `core/k8s.ts` from renderer code. If the renderer needs a pure helper, put it in `core/urls.ts` (or another pure module).
 - Main process only: everything under `core/` and `electron/`.
 - Anything the renderer needs from Node/git/network goes through an **IPC call** in `electron/main.ts` exposed by `electron/preload.ts`.
 
@@ -170,20 +172,29 @@ Supporting tokens (defined in both theme blocks):
 
 ## Views & Keyboard Shortcuts (main keydown in App.tsx)
 
-Views: `list` (repos), `commits`, `detail` (commit), `prs`, `prdetail`, `review`, `config` (dialog).
+Views: `list` (repos), `commits`, `detail` (commit), `prs`, `prdetail`, `review`, `k8s` (Kubernetes deployments), `config` (dialog).
 
 | Key | Action |
 |-----|--------|
-| `j`/`k` | navigate repos / PRs / commits |
+| `j`/`k` | navigate repos / PRs / commits / deployments |
 | `Enter`/`c` | open commit detail / PR detail (PR list: `Enter` opens AI review, same as `r`; mouse click still opens PR detail) |
-| `r` | open AI review for selected PR (PR list) |
+| `r` | open AI review for selected PR (PR list); refresh deployments (k8s view) |
+| `r-click ctx` | compare context with another (k8s view) |
 | `o` | open current PR in git (review view) |
 | `s` / `Shift+S` | sync one repo / sync all |
 | `p` / `P` | PRs for repo / all PRs |
+| `K` | open Kubernetes view (list view) |
 | `e` | open config |
 | `w` / `W` | select / switch workspace |
 | `g`/`G`, `f`, `/`, `:` | first/last, filter, search, command palette |
 | `q` | quit |
+
+### Kubernetes view (k8s)
+
+- Reads the **local kubeconfig** (`~/.kube/config` / `KUBECONFIG`) via `@kubernetes/client-node`. **Each context opens in its own tab** — the first tab is the **last selected context** (remembered in `~/.deltadot/kube-context`, falls back to the kubeconfig current context). Selecting a context in the title-bar dropdown opens/activates its tab; tabs are closeable (`✕`, at least one stays) and **renameable (double-click)**, including context tabs.
+- **Namespace selector lives inside each context tab** (per-tab namespace + refresh), followed by a **resource-kind submenu** (Deployments, Pods, ConfigMaps, Secrets, Services, StatefulSets, DaemonSets, Ingresses, Jobs, CronJobs) and the resource table (`#` + per-kind columns; READY/AGE/IMAGE cells are formatted). `Enter`/click on a **deployment** row opens it in its own workload tab (Image Version first, then containers/env/resources/probes…).
+- **Tab-by-tab compare**: right-click any context tab (or the dropdown) → a menu populates (open tabs first, marked `tab`) → pick another context → a **new compare tab** opens (`ctxA vs ctxB`). The compare table is `# | Deployment Name | <context name> | <context name> | …` — columns are the **dynamic context/tab labels**, each cell shows the short image tag with the deployment's **age inline** (`1.11.1 - 5m`), `—` when missing, yellow for versions drifting from the first context. Use **"+ Add context"** for more columns (✕ removes extras, minimum 2).
+- All k8s calls go through `window.api.k8sContexts/k8sNamespaces/k8sDeployments/k8sDeploymentDetail` (IPC `k8s-*` handlers in `main.ts` → `core/k8s.ts`).
 
 ## Conventions
 

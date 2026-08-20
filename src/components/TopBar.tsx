@@ -11,11 +11,11 @@ interface TopBarProps {
   isSyncing: boolean;
   syncProgress: { done: number; total: number };
   lastSync: string;
-  currentView: 'list' | 'prs';
+  currentView: 'list' | 'prs' | 'k8s';
   onSyncAll: () => void;
   onSelectWorkspace: () => void;
   onOpenConfig: () => void;
-  onChangeView: (view: 'list' | 'prs') => void;
+  onChangeView: (view: 'list' | 'prs' | 'k8s') => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }
@@ -61,7 +61,7 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
       <div className="info-group">
         <select
           value={currentView}
-          onChange={(e) => onChangeView(e.target.value as 'list' | 'prs')}
+          onChange={(e) => onChangeView(e.target.value as 'list' | 'prs' | 'k8s')}
           style={{
             padding: '2px 6px',
             background: 'var(--bg-tertiary)',
@@ -76,6 +76,7 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
         >
           <option value="list">Repos</option>
           <option value="prs">Pull Requests</option>
+          <option value="k8s">Kubernetes</option>
         </select>
       </div>
       <div className={`sync-status ${isSyncing ? 'syncing' : lastSync ? 'synced' : ''}`}>

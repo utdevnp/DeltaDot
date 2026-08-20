@@ -12,6 +12,7 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
     { key: 's', desc: 'sync' },
     { key: 'S', desc: 'sync all' },
     { key: 'P', desc: 'PRs' },
+    { key: 'K', desc: 'k8s' },
     { key: 'e', desc: 'config' },
     { key: '⌘N', desc: 'clone' },
     { key: '/', desc: 'search' },
@@ -52,6 +53,14 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
   ],
   review: [
     { key: 'b / Esc', desc: 'back' },
+    { key: 'q', desc: 'quit' },
+  ],
+  k8s: [
+    { key: '↑↓ j/k', desc: 'navigate' },
+    { key: '↵', desc: 'open tab' },
+    { key: 'r-click ctx', desc: 'compare' },
+    { key: 'r', desc: 'refresh' },
+    { key: 'b / Esc', desc: 'close / back' },
     { key: 'q', desc: 'quit' },
   ],
 };

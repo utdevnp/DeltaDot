@@ -16,12 +16,15 @@ import {
   saveWorkspaceConfig,
   loadActiveWorkspaceId,
   saveActiveWorkspaceId,
+  loadKubeContext,
+  saveKubeContext,
 } from '../core/config.js';
 import { analyzeRepo, fetchCommitDetail, run } from '../core/git.js';
 import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/remote.js';
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
+import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeResources } from '../core/k8s.js';
 import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -289,6 +292,36 @@ ipcMain.handle('stream-ai-review', async (event, aiConfig: any, jiraDescription:
     event.sender.send('ai-review-error', err?.message ?? String(err));
     throw err;
   }
+});
+
+// ─── Kubernetes ──────────────────────────────────────────────────────────────
+
+ipcMain.handle('k8s-contexts', async () => {
+  return getKubeContexts();
+});
+
+ipcMain.handle('k8s-namespaces', async (_event, contextName: string) => {
+  return getKubeNamespaces(contextName);
+});
+
+ipcMain.handle('k8s-deployments', async (_event, contextName: string, namespace: string) => {
+  return getKubeDeployments(contextName, namespace);
+});
+
+ipcMain.handle('k8s-deployment-detail', async (_event, contextName: string, namespace: string, name: string) => {
+  return getKubeDeploymentDetail(contextName, namespace, name);
+});
+
+ipcMain.handle('k8s-resources', async (_event, contextName: string, namespace: string, kind: string) => {
+  return getKubeResources(contextName, namespace, kind);
+});
+
+ipcMain.handle('load-kube-context', async () => {
+  return loadKubeContext();
+});
+
+ipcMain.handle('save-kube-context', async (_event, contextName: string) => {
+  await saveKubeContext(contextName);
 });
 
 // ─── Workspace Management ──────────────────────────────────────────────────

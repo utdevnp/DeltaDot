@@ -15,7 +15,9 @@
     "package": "npm run build && electron-builder --universal",
     "package:dir": "npm run build && electron-builder --dir"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@kubernetes/client-node": "^2.0.0"
+  },
   "devDependencies": {
     "@rolldown/binding-darwin-arm64": "^1.2.0",
     "@tailwindcss/vite": "^4.3.3",
