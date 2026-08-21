@@ -321,11 +321,20 @@ export interface KubeDiffSection {
 
 export interface KubeWorkloadTab {
   id: string; // `${namespace}/${name}`
+  context: string;
   name: string;
   namespace: string;
   label?: string; // custom tab label (rename), defaults to `${namespace}/${name}`
+  mode?: 'deployment' | 'pod-containers' | 'pod-logs';
   detail: KubeDeploymentDetail | null;
+  pods?: KubeResourceList | null;
+  selectedPod?: number;
+  containers?: string[];
+  selectedContainer?: number;
+  logs?: string;
   loading: boolean;
+  podsLoading?: boolean;
+  logsLoading?: boolean;
   error?: string;
 }
 
@@ -352,6 +361,9 @@ export interface KubeContextTab {
   namespaces: string[]; // namespaces available in this context
   kind: string; // selected resource kind id (deployments, pods, configmaps, …)
   resources: KubeResourceList; // table for the selected kind in the current namespace
+  podFilters: string[]; // pods only: subset of owner kinds, combinable
+  watch: boolean; // live watch mode: poll the current resource table
+  watchInterval: number; // seconds between polls (default 1)
   selected: number;
   loading: boolean;
   error: string;
@@ -362,7 +374,7 @@ export interface KubeContextTab {
 export interface KubeResourceColumn {
   key: string;
   label: string;
-  format?: 'text' | 'age' | 'ready' | 'image';
+  format?: 'text' | 'age' | 'ready' | 'image' | 'pod-status';
 }
 
 export interface KubeResourceItem {
@@ -370,6 +382,7 @@ export interface KubeResourceItem {
   name: string;
   namespace: string;
   cells: Record<string, string>;
+  loading?: boolean;
 }
 
 export interface KubeResourceList {

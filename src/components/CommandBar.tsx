@@ -6,11 +6,12 @@ interface CommandBarProps {
   onChange: (v: string) => void;
   onClose: () => void;
   onSubmit: (v: string) => void;
+  placeholder?: string;
 }
 
 const COMMANDS = ['q', 'quit', 'exit', 'config', 'settings', 'sync', 'prs'];
 
-export function CommandBar({ mode, value, onChange, onClose, onSubmit }: CommandBarProps) {
+export function CommandBar({ mode, value, onChange, onClose, onSubmit, placeholder }: CommandBarProps) {
   const filteredCommands = mode === 'command'
     ? COMMANDS.filter((c) => c.startsWith(value.toLowerCase()))
     : [];
@@ -21,7 +22,7 @@ export function CommandBar({ mode, value, onChange, onClose, onSubmit }: Command
         <input
           autoFocus
           type="text"
-          placeholder={mode === 'search' ? 'Search repos...' : 'Type command...'}
+          placeholder={placeholder ?? (mode === 'search' ? 'Search repos...' : 'Type command...')}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {

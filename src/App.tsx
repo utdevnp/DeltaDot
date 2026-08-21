@@ -712,19 +712,23 @@ export function App() {
       if (activate) setKubeActiveTab(ctxName);
       return;
     }
-    const nsList = await window.api.k8sNamespaces(ctxName).catch(() => []);
     const ctxObj = kubeContextsRef.current.find((c) => c.name === ctxName);
     const defaultNs = ctxObj?.namespace || 'default';
     const tab: KubeContextTab = {
-      id: ctxName, context: ctxName, namespace: defaultNs, namespaces: nsList,
-      kind: 'deployments', resources: { kind: 'deployments', columns: [], items: [] },
+      id: ctxName, context: ctxName, namespace: defaultNs, namespaces: [],
+      kind: 'pods', resources: { kind: 'pods', columns: [], items: [] },
+      podFilters: ['ReplicaSet'], watch: false, watchInterval: 1,
       selected: 0, loading: true, error: '',
     };
     setKubeContextTabs((prev) => [...prev, tab]);
     if (activate) setKubeActiveTab(ctxName);
     try {
-      const res = await window.api.k8sResources(ctxName, defaultNs, 'deployments');
-      setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, resources: res, loading: false } : t));
+      // Fetch namespaces and the default pod list in parallel.
+      const [nsList, res] = await Promise.all([
+        window.api.k8sNamespaces(ctxName).catch(() => []),
+        window.api.k8sResources(ctxName, defaultNs, 'pods'),
+      ]);
+      setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, namespaces: nsList, resources: res, loading: false } : t));
     } catch (err) {
       setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
     }
@@ -758,31 +762,95 @@ export function App() {
   // Change the namespace of a context tab and reload its current resource list.
   const handleKubeTabNamespaceChange = useCallback(async (tabId: string, ns: string) => {
     const kind = kubeContextTabsRef.current.find((t) => t.id === tabId)?.kind ?? 'deployments';
-    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, namespace: ns, loading: true, error: '' } : t));
+    const hasRows = (kubeContextTabsRef.current.find((t) => t.id === tabId)?.resources.items.length ?? 0) > 0;
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+      ...t,
+      namespace: ns,
+      loading: !hasRows,
+      error: '',
+      resources: hasRows ? { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) } : t.resources,
+    } : t));
     try {
       const res = await window.api.k8sResources(tabId, ns, kind);
-      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: res, selected: 0, loading: false } : t));
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false,
+      } : t));
     } catch (err) {
-      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: { kind, columns: [], items: [] }, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+        ...t, loading: false, error: err instanceof Error ? err.message : String(err),
+        resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: false })) },
+      } : t));
     }
   }, []);
 
   // Switch the resource kind of a context tab (deployments → pods → configmaps …).
   const handleKubeTabKindChange = useCallback(async (tabId: string, kind: string) => {
     const ns = kubeContextTabsRef.current.find((t) => t.id === tabId)?.namespace ?? 'default';
-    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, kind, loading: true, error: '' } : t));
+    const hasRows = (kubeContextTabsRef.current.find((t) => t.id === tabId)?.resources.items.length ?? 0) > 0;
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+      ...t, kind, loading: !hasRows, error: '',
+      resources: hasRows ? { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) } : t.resources,
+    } : t));
     try {
       const res = await window.api.k8sResources(tabId, ns, kind);
-      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: res, selected: 0, loading: false } : t));
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false,
+      } : t));
     } catch (err) {
-      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, resources: { kind, columns: [], items: [] }, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+        ...t, loading: false, error: err instanceof Error ? err.message : String(err),
+        resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: false })) },
+      } : t));
     }
+  }, []);
+
+  // Pod filters (combinable): owner kinds present in the list.
+  const handleKubeTabPodFilterToggle = useCallback((tabId: string, category: string) => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+      ...t,
+      podFilters: t.podFilters.includes(category) ? t.podFilters.filter((c) => c !== category) : [...t.podFilters, category],
+      selected: 0,
+    } : t));
+  }, []);
+
+  // Watch mode: toggle live polling of the tab's resource table.
+  const handleKubeTabWatchToggle = useCallback((tabId: string, enabled: boolean) => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, watch: enabled } : t));
+    if (enabled) refreshKubeTabRef.current(tabId); // immediate refresh on start
+  }, []);
+  // Watch interval in seconds (minimum 1).
+  const handleKubeTabWatchInterval = useCallback((tabId: string, seconds: number) => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, watchInterval: Math.max(1, seconds) } : t));
   }, []);
 
   const refreshKubeTab = useCallback((tabId: string) => {
     const tab = kubeContextTabsRef.current.find((t) => t.id === tabId);
     if (tab) handleKubeTabNamespaceChange(tabId, tab.namespace);
   }, [handleKubeTabNamespaceChange]);
+
+  // Silent refresh for watch mode: update the table in place without the
+  // loading state; keep the current list on transient errors.
+  const silentRefreshKubeTab = useCallback(async (tabId: string) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === tabId);
+    if (!tab) return;
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+      ...t,
+      resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) },
+    } : t));
+    try {
+      const res = await window.api.k8sResources(tab.context, tab.namespace, tab.kind);
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+        ...t,
+        resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
+        selected: res.items.length > 0 ? Math.min(t.selected, res.items.length - 1) : 0,
+      } : t));
+    } catch {
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+        ...t,
+        resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: false })) },
+      } : t));
+    }
+  }, []);
 
   // Select a resource row inside the active context tab.
   const selectKubeDeployment = useCallback((i: number) => {
@@ -801,16 +869,82 @@ export function App() {
       setKubeActiveTab(id);
       return;
     }
-    const newTab: KubeWorkloadTab = { id, name: row.name, namespace: row.namespace, detail: null, loading: true };
+    const newTab: KubeWorkloadTab = {
+      id, context: tab.context, name: row.name, namespace: row.namespace, mode: 'deployment',
+      detail: null, pods: null, selectedPod: 0, loading: true, podsLoading: true,
+    };
     setKubeWorkloadTabs((prev) => [...prev, newTab]);
     setKubeActiveTab(id);
     try {
-      const detail = await window.api.k8sDeploymentDetail(tab.context, row.namespace, row.name);
-      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, detail, loading: false } : t));
+      const [detail, pods] = await Promise.all([
+        window.api.k8sDeploymentDetail(tab.context, row.namespace, row.name),
+        window.api.k8sDeploymentPods(tab.context, row.namespace, row.name),
+      ]);
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, detail, pods, loading: false, podsLoading: false } : t));
     } catch (err) {
-      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, podsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
     }
   }, [kubeActiveTab, kubeContextTabs, kubeWorkloadTabs]);
+
+  const selectKubeWorkloadPod = useCallback((workloadId: string, i: number) => {
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === workloadId ? { ...t, selectedPod: i } : t));
+  }, []);
+
+  const selectKubeWorkloadContainer = useCallback((workloadId: string, i: number) => {
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === workloadId ? { ...t, selectedContainer: i } : t));
+  }, []);
+
+  const openKubePodContainers = useCallback(async (workloadId: string, i?: number) => {
+    const workload = kubeWorkloadTabsRef.current.find((t) => t.id === workloadId);
+    if (!workload?.pods?.items.length) return;
+    const index = i ?? workload.selectedPod ?? 0;
+    const pod = workload.pods.items[index];
+    if (!pod) return;
+    const container = pod.containers?.[0];
+    const id = `${workload.context}/${pod.namespace}/${pod.name}/logs`;
+    const existing = kubeWorkloadTabsRef.current.find((t) => t.id === id);
+    if (existing) {
+      setKubeActiveTab(id);
+      return;
+    }
+    const logTab: KubeWorkloadTab = {
+      id, context: workload.context, name: pod.name, namespace: pod.namespace,
+      mode: 'pod-logs', detail: null, logs: '', loading: true, logsLoading: true,
+    };
+    setKubeWorkloadTabs((prev) => [...prev, logTab]);
+    setKubeActiveTab(id);
+    try {
+      const logs = await window.api.k8sPodLogs(workload.context, pod.namespace, pod.name, container);
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, logs, loading: false, logsLoading: false } : t));
+    } catch (err) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, logsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
+
+  const openKubeContainerLogs = useCallback(async (containerTabId: string, i?: number) => {
+    const containerTab = kubeWorkloadTabsRef.current.find((t) => t.id === containerTabId);
+    if (!containerTab?.containers?.length) return;
+    const container = containerTab.containers[i ?? containerTab.selectedContainer ?? 0];
+    if (!container) return;
+    const id = `${containerTab.context}/${containerTab.namespace}/${containerTab.name}/${container}/logs`;
+    const existing = kubeWorkloadTabsRef.current.find((t) => t.id === id);
+    if (existing) {
+      setKubeActiveTab(id);
+      return;
+    }
+    const logTab: KubeWorkloadTab = {
+      id, context: containerTab.context, name: containerTab.name, namespace: containerTab.namespace,
+      mode: 'pod-logs', detail: null, logs: '', loading: true, logsLoading: true,
+    };
+    setKubeWorkloadTabs((prev) => [...prev, logTab]);
+    setKubeActiveTab(id);
+    try {
+      const logs = await window.api.k8sPodLogs(containerTab.context, containerTab.namespace, containerTab.name, container);
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, logs, loading: false, logsLoading: false } : t));
+    } catch (err) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, logsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
 
   // Tab-by-tab compare: right-click a context tab → pick another context →
   // new compare tab; deployments are fetched for both contexts in the source
@@ -950,29 +1084,47 @@ export function App() {
   kubeContextsRef.current = kubeContexts;
   const kubeContextTabsRef = useRef(kubeContextTabs);
   kubeContextTabsRef.current = kubeContextTabs;
+  const kubeWorkloadTabsRef = useRef(kubeWorkloadTabs);
+  kubeWorkloadTabsRef.current = kubeWorkloadTabs;
   const kubeActiveTabRef = useRef(kubeActiveTab);
   kubeActiveTabRef.current = kubeActiveTab;
   const loadKubeContextsRef = useRef(loadKubeContexts);
   loadKubeContextsRef.current = loadKubeContexts;
   const openKubeWorkloadRef = useRef(openKubeWorkload);
   openKubeWorkloadRef.current = openKubeWorkload;
+  const openKubePodContainersRef = useRef(openKubePodContainers);
+  openKubePodContainersRef.current = openKubePodContainers;
+  const openKubeContainerLogsRef = useRef(openKubeContainerLogs);
+  openKubeContainerLogsRef.current = openKubeContainerLogs;
+  const selectKubeWorkloadPodRef = useRef(selectKubeWorkloadPod);
+  selectKubeWorkloadPodRef.current = selectKubeWorkloadPod;
+  const selectKubeWorkloadContainerRef = useRef(selectKubeWorkloadContainer);
+  selectKubeWorkloadContainerRef.current = selectKubeWorkloadContainer;
   const kubeCompareTabRef = useRef(kubeCompareTab);
   kubeCompareTabRef.current = kubeCompareTab;
   const refreshKubeTabRef = useRef(refreshKubeTab);
   refreshKubeTabRef.current = refreshKubeTab;
+  const silentRefreshKubeTabRef = useRef(silentRefreshKubeTab);
+  silentRefreshKubeTabRef.current = silentRefreshKubeTab;
+  const handleKubeTabWatchToggleRef = useRef(handleKubeTabWatchToggle);
+  handleKubeTabWatchToggleRef.current = handleKubeTabWatchToggle;
   const closeActiveKubeTabRef = useRef(closeActiveKubeTab);
   closeActiveKubeTabRef.current = closeActiveKubeTab;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (inputMode !== 'none') return;
+      // Never hijack keys while typing in an input/select (tab rename, watch interval, …)
+      const evtTarget = e.target as HTMLElement | null;
+      if (evtTarget && (evtTarget.tagName === 'INPUT' || evtTarget.tagName === 'TEXTAREA' || evtTarget.tagName === 'SELECT')) return;
       if (showConfig) return;
       if (showCloneDialog) return;
       if (showAddWorkspace) return;
       if (editWorkspace) return;
 
-      // Global workspace shortcuts
-      if (e.key === 'w' && !e.metaKey && !e.ctrlKey) {
+      // Global workspace shortcuts ('w' switches workspace EXCEPT in the k8s
+      // view, where 'w' toggles watch mode on the active context tab).
+      if (e.key === 'w' && !e.metaKey && !e.ctrlKey && view !== 'k8s') {
         if (workspaces.length > 1) {
           e.preventDefault();
           const idx = workspaces.findIndex((w) => w.id === activeWorkspaceId);
@@ -1346,17 +1498,20 @@ export function App() {
         }
         case 'k8s': {
           const ctxTab = kubeContextTabs.find((t) => t.id === kubeActiveTab) ?? kubeContextTabs[0];
-          const onContextList = !!ctxTab && kubeActiveTab !== 'compare' && !kubeWorkloadTabs.some((t) => t.id === kubeActiveTab);
+          const activeWorkload = kubeWorkloadTabs.find((t) => t.id === kubeActiveTab);
+          const onContextList = !!ctxTab && kubeActiveTab !== 'compare' && !activeWorkload;
           switch (e.key) {
             case 'j': case 'ArrowDown':
-              if (!onContextList) break;
               e.preventDefault();
-              selectKubeDeployment(Math.min(ctxTab.selected + 1, ctxTab.resources.items.length - 1));
+              if (onContextList) selectKubeDeployment(Math.min(ctxTab.selected + 1, ctxTab.resources.items.length - 1));
+              else if (activeWorkload?.pods?.items.length) selectKubeWorkloadPodRef.current(activeWorkload.id, Math.min((activeWorkload.selectedPod ?? 0) + 1, activeWorkload.pods.items.length - 1));
+              else if (activeWorkload?.containers?.length) selectKubeWorkloadContainerRef.current(activeWorkload.id, Math.min((activeWorkload.selectedContainer ?? 0) + 1, activeWorkload.containers.length - 1));
               break;
             case 'k': case 'ArrowUp':
-              if (!onContextList) break;
               e.preventDefault();
-              selectKubeDeployment(Math.max(ctxTab.selected - 1, 0));
+              if (onContextList) selectKubeDeployment(Math.max(ctxTab.selected - 1, 0));
+              else if (activeWorkload?.pods?.items.length) selectKubeWorkloadPodRef.current(activeWorkload.id, Math.max((activeWorkload.selectedPod ?? 0) - 1, 0));
+              else if (activeWorkload?.containers?.length) selectKubeWorkloadContainerRef.current(activeWorkload.id, Math.max((activeWorkload.selectedContainer ?? 0) - 1, 0));
               break;
             case 'g':
               if (!e.shiftKey && onContextList) selectKubeDeployment(0);
@@ -1368,10 +1523,20 @@ export function App() {
               e.preventDefault();
               if (onContextList && ctxTab.resources.items[ctxTab.selected]) {
                 openKubeWorkloadRef.current(ctxTab.selected);
+              } else if (activeWorkload?.mode === 'deployment') {
+                openKubePodContainersRef.current(activeWorkload.id, activeWorkload.selectedPod ?? 0);
+              } else if (activeWorkload?.mode === 'pod-containers') {
+                openKubeContainerLogsRef.current(activeWorkload.id, activeWorkload.selectedContainer ?? 0);
               }
               break;
             case 'r':
               if (ctxTab) refreshKubeTabRef.current(ctxTab.id);
+              break;
+            case 'w':
+              if (ctxTab) {
+                e.preventDefault();
+                handleKubeTabWatchToggleRef.current(ctxTab.id, !ctxTab.watch);
+              }
               break;
             case 'b': case 'Escape':
               closeActiveKubeTabRef.current();
@@ -1609,12 +1774,22 @@ export function App() {
             workloadTabs={kubeWorkloadTabs}
             compareTab={kubeCompareTab}
             error={kubeError}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
             onOpenContextTab={openKubeContextTab}
             onTabNamespaceChange={handleKubeTabNamespaceChange}
             onTabKindChange={handleKubeTabKindChange}
+            onTabPodFilterToggle={handleKubeTabPodFilterToggle}
+            onTabWatchToggle={handleKubeTabWatchToggle}
+            onTabWatchInterval={handleKubeTabWatchInterval}
             onRefreshTab={refreshKubeTab}
+            onSilentRefreshTab={silentRefreshKubeTab}
             onSelect={selectKubeDeployment}
             onOpenWorkload={openKubeWorkload}
+            onSelectWorkloadPod={selectKubeWorkloadPod}
+            onOpenPodLogs={openKubePodContainers}
+            onSelectWorkloadContainer={selectKubeWorkloadContainer}
+            onOpenContainerLogs={openKubeContainerLogs}
             onCompareContext={openKubeContextCompare}
             onAddCompareContext={addKubeCompareContext}
             onRemoveCompareSide={removeKubeCompareSide}
@@ -1705,6 +1880,7 @@ export function App() {
           mode="search"
           value={searchQuery}
           onChange={setSearchQuery}
+          placeholder={view === 'k8s' ? 'Search pods or deployments...' : 'Search repos...'}
           onClose={() => { setInputMode('none'); setSearchQuery(''); }}
           onSubmit={() => setInputMode('none')}
         />

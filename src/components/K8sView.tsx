@@ -1,11 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type {
   KubeContext, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeContainer,
   KubeResourceColumn, KubeResourceItem,
 } from '../../core/types.js';
 import { KUBE_RESOURCE_OPTIONS } from '../../core/types.js';
 import { timeAgo } from '../../core/utils.js';
-import { compareContextImages, type KubeImageCompareRow } from '../../core/k8s-compare.js';
+import { SPINNER } from '../../core/utils.js';
+import { compareContextImages, extractImageVersion, type KubeImageCompareRow } from '../../core/k8s-compare.js';
 
 interface K8sViewProps {
   contexts: KubeContext[];
@@ -14,12 +15,22 @@ interface K8sViewProps {
   workloadTabs: KubeWorkloadTab[];
   compareTab: KubeCompareTab | null;
   error: string; // global init error (no contexts found)
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
   onOpenContextTab: (ctx: string) => void;
   onTabNamespaceChange: (tabId: string, ns: string) => void;
   onTabKindChange: (tabId: string, kind: string) => void;
+  onTabPodFilterToggle: (tabId: string, category: string) => void;
+  onTabWatchToggle: (tabId: string, enabled: boolean) => void;
+  onTabWatchInterval: (tabId: string, seconds: number) => void;
   onRefreshTab: (tabId: string) => void;
+  onSilentRefreshTab: (tabId: string) => void;
   onSelect: (i: number) => void;
   onOpenWorkload: (i: number) => void;
+  onSelectWorkloadPod: (workloadId: string, i: number) => void;
+  onOpenPodLogs: (workloadId: string, i?: number) => void;
+  onSelectWorkloadContainer: (workloadId: string, i: number) => void;
+  onOpenContainerLogs: (workloadId: string, i?: number) => void;
   onCompareContext: (sourceCtx: string, otherCtx: string) => void;
   onAddCompareContext: (ctx: string) => void;
   onRemoveCompareSide: (index: number) => void;
@@ -282,6 +293,25 @@ function CompareView({ compareTab, contexts, onAddCompareContext, onRemoveCompar
 
 // ─── Context tab — resource table with namespace + kind selectors ───────────
 
+const POD_ERROR_STATUSES = new Set([
+  'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerError',
+  'RunContainerError', 'InvalidImageName', 'OOMKilled', 'Evicted', 'Error', 'Failed', 'Unknown',
+  'ContainerStatusUnknown', 'DeadlineExceeded',
+]);
+
+function podStatusColor(status: string): string {
+  // Support both the current raw Kubernetes status and older cached labels.
+  const rawStatus = status.replace(/^Init:/, '');
+  if (POD_ERROR_STATUSES.has(rawStatus) || status.startsWith('Error')) return 'var(--accent-red)';
+  if (status === 'Running' || status === 'Succeeded' || status.startsWith('Healthy')) return 'var(--text-primary)';
+  if (status.startsWith('Unhealthy') || status.length > 0) return 'var(--accent-orange)';
+  return 'var(--text-primary)';
+}
+
+function podStatusText(status: string): string {
+  return status.replace(/^(Healthy|Unhealthy|Error)\s*[·:-]\s*/i, '');
+}
+
 function ResourceCell({ column, value }: { column: KubeResourceColumn; value: string }) {
   if (column.format === 'age') {
     return value ? <span title={value}>{timeAgo(value)}</span> : <span>—</span>;
@@ -292,38 +322,105 @@ function ResourceCell({ column, value }: { column: KubeResourceColumn; value: st
     return <span style={{ color: ok ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>{value || '—'}</span>;
   }
   if (column.format === 'image') {
+    const fullImagePath = value.split(',')[0]?.trim() ?? '';
+    const mainImage = fullImagePath;
+    const version = mainImage ? extractImageVersion(mainImage) : '';
     return (
       <span style={{
-        color: 'var(--text-secondary)', fontSize: 12, wordBreak: 'break-all',
+        color: 'var(--text-primary)', fontSize: 12, wordBreak: 'break-all',
         fontFamily: 'SF Mono, Menlo, Consolas, monospace',
-      }} title={value}>
-        {value || '—'}
+      }} title={fullImagePath || 'Image path unavailable'} aria-label={fullImagePath || 'Image path unavailable'}>
+        {version || '—'}
+      </span>
+    );
+  }
+  if (column.format === 'pod-status') {
+    const displayStatus = podStatusText(value);
+    return (
+      <span style={{
+        display: 'block', color: podStatusColor(value), fontWeight: 600,
+        whiteSpace: 'nowrap', overflow: 'visible', textOverflow: 'clip',
+      }} title={displayStatus}>
+        {displayStatus || 'Unknown'}
       </span>
     );
   }
   return <span>{value || '—'}</span>;
 }
 
-function colStyle(c: KubeResourceColumn): React.CSSProperties {
-  return (c.key === 'name' || c.key === 'image')
-    ? { flex: 2, minWidth: 0 }
-    : { width: 130, flexShrink: 0 };
+function podRowStyle(status: string, owner: string, selected: boolean): React.CSSProperties {
+  return {
+    color: podStatusColor(status),
+    // Job-owned pods get a subtle tint; ReplicaSet-owned pods remain unchanged.
+    ...(owner === 'Job' && !selected ? { background: 'var(--tint-purple)' } : {}),
+  };
 }
 
-function ContextTabView({ tab, onNamespaceChange, onKindChange, onRefresh, onSelect, onOpenWorkload }: {
+function colStyle(c: KubeResourceColumn): React.CSSProperties {
+  const base: React.CSSProperties = { boxSizing: 'border-box' };
+  if (c.key === 'name') {
+    return { ...base, flex: 1, minWidth: 140 };
+  }
+  const widths: Record<string, number> = {
+    image: 130,
+    status: 150,
+    namespace: 110,
+    ready: 58,
+    restarts: 72,
+    ip: 105,
+    node: 120,
+    owner: 90,
+    age: 72,
+  };
+  return { ...base, width: widths[c.key] ?? 100, flexShrink: 0 };
+}
+
+function ContextTabView({ tab, searchQuery, onSearchQueryChange, onNamespaceChange, onKindChange, onPodFilterToggle, onWatchToggle, onWatchInterval, onRefresh, onSilentRefresh, onSelect, onOpenWorkload }: {
   tab: KubeContextTab;
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
   onNamespaceChange: (tabId: string, ns: string) => void;
   onKindChange: (tabId: string, kind: string) => void;
+  onPodFilterToggle: (tabId: string, category: string) => void;
+  onWatchToggle: (tabId: string, enabled: boolean) => void;
+  onWatchInterval: (tabId: string, seconds: number) => void;
   onRefresh: (tabId: string) => void;
+  onSilentRefresh: (tabId: string) => void;
   onSelect: (i: number) => void;
   onOpenWorkload: (i: number) => void;
 }) {
+  const [loadingFrame, setLoadingFrame] = useState(0);
   const kindLabel = KUBE_RESOURCE_OPTIONS.find((o) => o.id === tab.kind)?.label ?? tab.kind;
   const canOpenWorkload = tab.kind === 'deployments';
+  const showPodFilter = tab.kind === 'pods';
+  const filters = tab.podFilters ?? ['ReplicaSet'];
+  // Owner-kind filter chips are built from the kinds actually present (Job,
+  // ReplicaSet, DaemonSet, StatefulSet, 'None', …) — no name-based logic.
+  const ownerKinds = [...new Set(tab.resources.items.map((i) => i.cells.owner ?? 'None'))].sort();
+  const query = searchQuery.trim().toLowerCase();
+  const items = tab.resources.items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => !showPodFilter || filters.includes(item.cells.owner ?? 'None'))
+    .filter(({ item }) => !query || [item.name, ...Object.values(item.cells)].some((value) => value.toLowerCase().includes(query)));
+  const itemLabel = `${items.length} ${kindLabel.toLowerCase()}`;
+
+  // Watch mode: poll the current resource table every watchInterval seconds —
+  // silently (no loading state, no page flicker).
+  const intervalMs = Math.max(1, tab.watchInterval ?? 1) * 1000;
+  React.useEffect(() => {
+    if (!tab.watch) return;
+    const id = setInterval(() => onSilentRefresh(tab.id), intervalMs);
+    return () => clearInterval(id);
+  }, [tab.watch, intervalMs, tab.id, onSilentRefresh]);
+
+  useEffect(() => {
+    const id = setInterval(() => setLoadingFrame((frame) => frame + 1), 120);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>namespace</span>
         <select
           value={tab.namespace}
@@ -343,8 +440,79 @@ function ContextTabView({ tab, onNamespaceChange, onKindChange, onRefresh, onSel
         >
           {KUBE_RESOURCE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
         </select>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => onSearchQueryChange(e.target.value)}
+          placeholder="Search..."
+          aria-label="Search Kubernetes resources"
+          style={{
+            width: 170, padding: '3px 8px', background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-primary)',
+            fontFamily: 'inherit', fontSize: 11, outline: 'none',
+          }}
+        />
+        {showPodFilter && (
+          <>
+            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>filter</span>
+            {ownerKinds.map((kind) => {
+              const active = filters.includes(kind);
+              return (
+                <button
+                  key={kind}
+                  onClick={() => onPodFilterToggle(tab.id, kind)}
+                  style={{
+                    padding: '2px 10px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+                    background: active ? 'var(--tint-blue)' : 'transparent',
+                    border: `1px solid ${active ? 'var(--border-blue)' : 'var(--border)'}`,
+                    color: active ? 'var(--accent-blue)' : 'var(--text-dim)',
+                    fontWeight: active ? 600 : 400,
+                  }}
+                  title={`Show/hide ${kind}-owned pods`}
+                >
+                  {kind}
+                </button>
+              );
+            })}
+          </>
+        )}
+        <button
+          onClick={() => onWatchToggle(tab.id, !tab.watch)}
+          style={{
+            padding: '2px 10px', borderRadius: 4, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+            background: tab.watch ? 'var(--tint-green)' : 'var(--bg-tertiary)',
+            border: `1px solid ${tab.watch ? 'var(--border-green)' : 'var(--border)'}`,
+            color: tab.watch ? 'var(--accent-green)' : 'var(--text-secondary)',
+            fontWeight: tab.watch ? 600 : 400,
+          }}
+          title={tab.watch ? 'Stop watching — click to pause live refresh' : 'Watch mode: live-refresh this table'}
+        >
+          {tab.watch ? '● watching' : '▶ watch'}
+        </button>
+        {tab.watch && (
+          <>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={tab.watchInterval ?? 1}
+              onChange={(e) => onWatchInterval(tab.id, parseInt(e.target.value, 10) || 1)}
+              style={{
+                width: 52, padding: '2px 6px', fontFamily: 'inherit', fontSize: 11, textAlign: 'center',
+                background: 'var(--bg-tertiary)', color: 'var(--text-primary)',
+                border: '1px solid var(--border)', borderRadius: 4, outline: 'none',
+              }}
+              title="Watch interval in seconds (default 1)"
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>sec</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--accent-green)' }} title="Watch mode active — press w to toggle">
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent-green)', animation: 'kube-pulse 1.2s ease-in-out infinite' }} />
+              watch mode active
+            </span>
+          </>
+        )}
         <button onClick={() => onRefresh(tab.id)} style={{ ...SELECT_STYLE, cursor: 'pointer' }} title="Refresh">↻</button>
-        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{tab.resources.items.length} {kindLabel.toLowerCase()}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{itemLabel}</span>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>right-click tab to compare</span>
       </div>
@@ -365,7 +533,7 @@ function ContextTabView({ tab, onNamespaceChange, onKindChange, onRefresh, onSel
             cursor: 'pointer', fontFamily: 'inherit',
           }}>Retry</button>
         </div>
-      ) : tab.resources.items.length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="empty-state">
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="4" width="20" height="14" rx="2" ry="2"/>
@@ -382,21 +550,35 @@ function ContextTabView({ tab, onNamespaceChange, onKindChange, onRefresh, onSel
               <div className="cell" key={c.key} style={colStyle(c)}>{c.label}</div>
             ))}
           </div>
-          {tab.resources.items.map((item, i) => (
-            <div
-              key={item.key}
-              className={`table-row ${i === tab.selected ? 'selected' : ''}`}
-              onClick={() => { onSelect(i); if (canOpenWorkload) onOpenWorkload(i); }}
-              title={canOpenWorkload ? 'Open workload in a new tab' : undefined}
-            >
-              <div className="cell" style={{ width: 36, flexShrink: 0, color: 'var(--text-dim)' }}>{i + 1}</div>
-              {tab.resources.columns.map((c) => (
-                <div className="cell" key={c.key} style={{ ...colStyle(c), fontWeight: c.key === 'name' && i === tab.selected ? 600 : 400 }}>
-                  <ResourceCell column={c} value={item.cells[c.key] ?? ''} />
+          {items.map(({ item, index }, i) => {
+            const selected = i === tab.selected;
+            return (
+              <div
+                key={item.key}
+                className={`table-row ${selected ? 'selected' : ''}`}
+                style={tab.kind === 'pods' ? podRowStyle(item.cells.status ?? '', item.cells.owner ?? '', selected) : undefined}
+                onClick={() => { onSelect(index); if (canOpenWorkload) onOpenWorkload(index); }}
+                title={canOpenWorkload ? 'Open workload in a new tab' : undefined}
+              >
+                <div className="cell" style={{ width: 36, flexShrink: 0, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                  {i + 1}
+                  {item.loading && (
+                    <span
+                      title="Refreshing"
+                      style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)', width: 14, textAlign: 'center' }}
+                    >
+                      {SPINNER[(loadingFrame + i * 2) % SPINNER.length]}
+                    </span>
+                  )}
                 </div>
-              ))}
-            </div>
-          ))}
+                {tab.resources.columns.map((c) => (
+                  <div className="cell" key={c.key} style={{ ...colStyle(c), fontWeight: c.key === 'name' && selected ? 600 : 400 }}>
+                    <ResourceCell column={c} value={item.cells[c.key] ?? ''} />
+                  </div>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -414,9 +596,97 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
   );
 }
 
-function WorkloadDetail({ tab, onClose }: {
-  tab: KubeWorkloadTab; onClose: () => void;
+function PodLogsView({ tab, onClose }: { tab: KubeWorkloadTab; onClose: () => void }) {
+  return (
+    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{tab.namespace}/{tab.name} logs</span>
+        <div style={{ flex: 1 }} />
+        <button className="back-btn" onClick={onClose} title="Close tab">✕</button>
+      </div>
+      {tab.loading ? <div className="state-message">Loading pod logs...</div> : tab.error ? <div className="state-message error">{tab.error}</div> : (
+        <pre style={{ flex: 1, overflow: 'auto', margin: 0, padding: 16, color: 'var(--text-primary)', background: 'var(--bg-primary)', font: '12px/1.55 var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {tab.logs || 'No logs available.'}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function PodContainersView({ tab, onClose, onSelect, onOpenLogs }: {
+  tab: KubeWorkloadTab; onClose: () => void; onSelect: (i: number) => void; onOpenLogs: (i: number) => void;
 }) {
+  const containers = tab.containers ?? [];
+  return (
+    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{tab.namespace}/{tab.name} containers</span>
+        <div style={{ flex: 1 }} />
+        <button className="back-btn" onClick={onClose} title="Close tab">✕</button>
+      </div>
+      {containers.length === 0 ? <div className="empty-state"><div className="text">No containers found.</div></div> : (
+        <div className="table-container">
+          <div className="table-header">
+            <div className="cell" style={{ width: 36, flexShrink: 0 }}>#</div>
+            <div className="cell" style={{ flex: 1 }}>CONTAINER</div>
+            <div className="cell" style={{ width: 120, flexShrink: 0 }}>ACTION</div>
+          </div>
+          {containers.map((container, i) => {
+            const selected = i === (tab.selectedContainer ?? 0);
+            return (
+              <div key={container} className={`table-row ${selected ? 'selected' : ''}`} onClick={() => { onSelect(i); onOpenLogs(i); }} onDoubleClick={() => onOpenLogs(i)} title="Open container logs">
+                <div className="cell" style={{ width: 36, flexShrink: 0, color: 'var(--text-dim)' }}>{i + 1}</div>
+                <div className="cell" style={{ flex: 1, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{container}</div>
+                <div className="cell" style={{ width: 120, flexShrink: 0, color: 'var(--accent-blue)' }}>Enter for logs</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeploymentPods({ tab, onSelect, onOpen }: {
+  tab: KubeWorkloadTab;
+  onSelect: (i: number) => void;
+  onOpen: (i: number) => void;
+}) {
+  const pods = tab.pods;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.4, padding: '4px 8px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
+        Pods {pods ? `(${pods.items.length})` : ''}
+      </div>
+      {tab.podsLoading && !pods ? <div className="state-message">Loading pods...</div> : !pods || pods.items.length === 0 ? (
+        <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>No pods found for this deployment.</div>
+      ) : (
+        <div className="table-container" style={{ maxHeight: 300, border: '1px solid var(--border)' }}>
+          <div className="table-header">
+            <div className="cell" style={{ width: 36, flexShrink: 0 }}>#</div>
+            {pods.columns.map((c) => <div className="cell" key={c.key} style={colStyle(c)}>{c.label}</div>)}
+          </div>
+          {pods.items.map((item, i) => {
+            const selected = i === (tab.selectedPod ?? 0);
+            return (
+              <div key={item.key} className={`table-row ${selected ? 'selected' : ''}`} style={podRowStyle(item.cells.status ?? '', item.cells.owner ?? '', selected)} onClick={() => { onSelect(i); onOpen(i); }} onDoubleClick={() => onOpen(i)} title="Open pod logs">
+                <div className="cell" style={{ width: 36, flexShrink: 0, color: 'var(--text-dim)' }}>{i + 1}</div>
+                {pods.columns.map((c) => <div className="cell" key={c.key} style={colStyle(c)}><ResourceCell column={c} value={item.cells[c.key] ?? ''} /></div>)}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkloadDetail({ tab, onClose, onSelectPod, onOpenPodLogs }: {
+  tab: KubeWorkloadTab; onClose: () => void; onSelectPod: (i: number) => void; onOpenPodLogs: (i: number) => void;
+  onSelectContainer: (i: number) => void; onOpenContainerLogs: (i: number) => void;
+}) {
+  if (tab.mode === 'pod-logs') return <PodLogsView tab={tab} onClose={onClose} />;
+  if (tab.mode === 'pod-containers') return <PodContainersView tab={tab} onClose={onClose} onSelect={onSelectContainer} onOpenLogs={onOpenContainerLogs} />;
   const d = tab.detail;
 
   return (
@@ -449,6 +719,8 @@ function WorkloadDetail({ tab, onClose }: {
               </div>
             ))}
           </div>
+
+          <DeploymentPods tab={tab} onSelect={onSelectPod} onOpen={onOpenPodLogs} />
 
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.4, padding: '4px 8px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
@@ -521,9 +793,10 @@ function WorkloadDetail({ tab, onClose }: {
 // ─── Main view ──────────────────────────────────────────────────────────────
 
 export function K8sView({
-  contexts, contextTabs, activeTab, workloadTabs, compareTab, error,
-  onOpenContextTab, onTabNamespaceChange, onTabKindChange, onRefreshTab,
-  onSelect, onOpenWorkload, onCompareContext, onAddCompareContext, onRemoveCompareSide,
+  contexts, contextTabs, activeTab, workloadTabs, compareTab, error, searchQuery, onSearchQueryChange,
+  onOpenContextTab, onTabNamespaceChange, onTabKindChange, onTabPodFilterToggle,
+  onTabWatchToggle, onTabWatchInterval, onRefreshTab, onSilentRefreshTab,
+  onSelect, onOpenWorkload, onSelectWorkloadPod, onOpenPodLogs, onSelectWorkloadContainer, onOpenContainerLogs, onCompareContext, onAddCompareContext, onRemoveCompareSide,
   onActivateTab, onCloseTab, onRenameTab, onBack,
 }: K8sViewProps) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ctx: string } | null>(null);
@@ -631,13 +904,26 @@ export function K8sView({
           onClose={() => onCloseTab('compare')}
         />
       ) : activeWorkloadTab ? (
-        <WorkloadDetail tab={activeWorkloadTab} onClose={() => onCloseTab(activeWorkloadTab.id)} />
+        <WorkloadDetail
+          tab={activeWorkloadTab}
+          onClose={() => onCloseTab(activeWorkloadTab.id)}
+          onSelectPod={(i) => onSelectWorkloadPod(activeWorkloadTab.id, i)}
+          onOpenPodLogs={(i) => onOpenPodLogs(activeWorkloadTab.id, i)}
+          onSelectContainer={(i) => onSelectWorkloadContainer(activeWorkloadTab.id, i)}
+          onOpenContainerLogs={(i) => onOpenContainerLogs(activeWorkloadTab.id, i)}
+        />
       ) : activeContextTab ? (
         <ContextTabView
           tab={activeContextTab}
+          searchQuery={searchQuery}
+          onSearchQueryChange={onSearchQueryChange}
           onNamespaceChange={onTabNamespaceChange}
           onKindChange={onTabKindChange}
+          onPodFilterToggle={onTabPodFilterToggle}
+          onWatchToggle={onTabWatchToggle}
+          onWatchInterval={onTabWatchInterval}
           onRefresh={onRefreshTab}
+          onSilentRefresh={onSilentRefreshTab}
           onSelect={onSelect}
           onOpenWorkload={onOpenWorkload}
         />

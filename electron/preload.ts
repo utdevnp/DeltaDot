@@ -50,6 +50,8 @@ export interface DeltaDotAPI {
   k8sNamespaces: (contextName: string) => Promise<string[]>;
   k8sDeployments: (contextName: string, namespace: string) => Promise<KubeDeploymentSummary[]>;
   k8sDeploymentDetail: (contextName: string, namespace: string, name: string) => Promise<KubeDeploymentDetail>;
+  k8sDeploymentPods: (contextName: string, namespace: string, name: string) => Promise<KubeResourceList>;
+  k8sPodLogs: (contextName: string, namespace: string, name: string, container?: string) => Promise<string>;
   k8sResources: (contextName: string, namespace: string, kind: string) => Promise<KubeResourceList>;
   loadKubeContext: () => Promise<string | null>;
   saveKubeContext: (contextName: string) => Promise<void>;
@@ -118,6 +120,8 @@ const api: DeltaDotAPI = {
   k8sNamespaces: (contextName) => ipcRenderer.invoke('k8s-namespaces', contextName),
   k8sDeployments: (contextName, namespace) => ipcRenderer.invoke('k8s-deployments', contextName, namespace),
   k8sDeploymentDetail: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-detail', contextName, namespace, name),
+  k8sDeploymentPods: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-pods', contextName, namespace, name),
+  k8sPodLogs: (contextName, namespace, name, container) => ipcRenderer.invoke('k8s-pod-logs', contextName, namespace, name, container),
   k8sResources: (contextName, namespace, kind) => ipcRenderer.invoke('k8s-resources', contextName, namespace, kind),
   loadKubeContext: () => ipcRenderer.invoke('load-kube-context'),
   saveKubeContext: (contextName) => ipcRenderer.invoke('save-kube-context', contextName),

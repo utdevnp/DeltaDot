@@ -243,6 +243,67 @@ export async function getKubeDeploymentDetail(
   }
 }
 
+export async function getKubeDeploymentPods(
+  contextName: string,
+  namespace: string,
+  name: string,
+): Promise<KubeResourceList> {
+  const kc = makeConfig(contextName);
+  const apps = kc.makeApiClient(k8s.AppsV1Api);
+  try {
+    const deployment: any = await apps.readNamespacedDeployment({ name, namespace });
+    const deploymentSelector = deployment.spec?.selector ?? {};
+    const selectorParts = Object.entries(deploymentSelector.matchLabels ?? {})
+      .map(([key, value]) => `${key}=${value}`);
+    for (const expression of deploymentSelector.matchExpressions ?? []) {
+      const values = (expression.values ?? []).join(',');
+      if (expression.operator === 'In') selectorParts.push(`${expression.key} in (${values})`);
+      else if (expression.operator === 'NotIn') selectorParts.push(`${expression.key} notin (${values})`);
+      else if (expression.operator === 'Exists') selectorParts.push(expression.key);
+      else if (expression.operator === 'DoesNotExist') selectorParts.push(`!${expression.key}`);
+    }
+    const selector = selectorParts.join(',');
+    const core = kc.makeApiClient(k8s.CoreV1Api);
+    const res: any = await core.listNamespacedPod({ namespace, labelSelector: selector || undefined });
+    const pods = ((res.items ?? []) as any[]).sort((a, b) =>
+      String(a.metadata?.name ?? '').localeCompare(String(b.metadata?.name ?? '')),
+    );
+    return {
+      kind: 'pods',
+      columns: RESOURCE_SPECS.pods.columns,
+      items: pods.map((pod) => ({
+        key: `${pod.metadata?.namespace ?? namespace}/${pod.metadata?.name ?? ''}`,
+        name: pod.metadata?.name ?? '',
+        namespace: pod.metadata?.namespace ?? namespace,
+        cells: RESOURCE_SPECS.pods.extract(pod),
+        containers: (pod.spec?.containers ?? []).map((container: any) => container.name).filter(Boolean),
+      })),
+    };
+  } catch (err) {
+    throw new Error(describeError(err, contextName));
+  }
+}
+
+export async function getKubePodLogs(
+  contextName: string,
+  namespace: string,
+  name: string,
+  container?: string,
+): Promise<string> {
+  const kc = makeConfig(contextName);
+  const core = kc.makeApiClient(k8s.CoreV1Api);
+  try {
+    const pod: any = await core.readNamespacedPod({ name, namespace });
+    const selectedContainer = container || pod.spec?.containers?.[0]?.name;
+    const result: any = await core.readNamespacedPodLog({
+      name, namespace, container: selectedContainer, tailLines: 500,
+    });
+    return typeof result === 'string' ? result : String(result ?? '');
+  } catch (err) {
+    throw new Error(describeError(err, contextName));
+  }
+}
+
 // ─── Generic namespace resources (pods, configmaps, secrets, …) ─────────────
 
 const EMPTY_RESOURCE: KubeResourceList = { kind: '', columns: [], items: [] };
@@ -265,6 +326,54 @@ interface ResourceSpec {
   kind: string;
   columns: KubeResourceColumn[];
   extract: (item: any) => Record<string, string>;
+  /** Return true to exclude the item from the table (e.g. migration/cronjob pods). */
+  exclude?: (item: any) => boolean;
+}
+
+/** Return the pod's actual Kubernetes status/reason for display. */
+function podHealthStatus(p: any, containerStatuses: any[]): string {
+  const phase = p?.status?.phase ?? 'Unknown';
+  if (p?.metadata?.deletionTimestamp) return 'Terminating';
+  const initStatuses = p?.status?.initContainerStatuses ?? [];
+  const errorReasons = new Set([
+    'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerError',
+    'RunContainerError', 'InvalidImageName', 'OOMKilled', 'Evicted', 'Error',
+  ]);
+  const initError = initStatuses
+    .map((c: any) => c?.state?.waiting?.reason || c?.state?.terminated?.reason)
+    .find((reason: string | undefined) => reason && errorReasons.has(reason));
+  if (initError) return `Init:${initError}`;
+
+  const initWaiting = initStatuses.map((c: any) => c?.state?.waiting?.reason).find(Boolean);
+  if (initWaiting) return `Init:${initWaiting}`;
+
+  const initFailed = initStatuses.find((c: any) => (c?.state?.terminated?.exitCode ?? 0) > 0);
+  if (initFailed) return `Init:${initFailed?.state?.terminated?.reason || 'Error'}`;
+
+  const initCompleted = initStatuses.filter((c: any) => c?.state?.terminated?.exitCode === 0).length;
+  if (initStatuses.length > 0 && initCompleted < initStatuses.length) return `Init:${initCompleted}/${initStatuses.length}`;
+
+  const errorReason = containerStatuses
+    .map((c: any) => c?.state?.waiting?.reason || c?.state?.terminated?.reason)
+    .find((reason: string | undefined) => reason && errorReasons.has(reason));
+  const failedExit = containerStatuses.find((c: any) => (c?.state?.terminated?.exitCode ?? 0) > 0);
+
+  if (phase === 'Failed' || phase === 'Unknown' || errorReason || failedExit) {
+    return errorReason || failedExit?.state?.terminated?.reason || phase;
+  }
+
+  const ready = containerStatuses.filter((c: any) => c?.ready).length;
+  if (phase === 'Running' && containerStatuses.length > 0 && ready === containerStatuses.length) {
+    return phase;
+  }
+  if (phase === 'Succeeded') return phase;
+
+  const waitingReason = containerStatuses
+    .map((c: any) => c?.state?.waiting?.reason)
+    .find(Boolean);
+  if (waitingReason) return waitingReason;
+  if (phase === 'Running' && containerStatuses.length > 0) return 'Running (not ready)';
+  return phase;
 }
 
 const RESOURCE_SPECS: Record<string, ResourceSpec> = {
@@ -295,10 +404,12 @@ const RESOURCE_SPECS: Record<string, ResourceSpec> = {
       { key: 'name', label: 'NAME' },
       { key: 'namespace', label: 'NAMESPACE' },
       { key: 'ready', label: 'READY', format: 'ready' },
-      { key: 'status', label: 'STATUS' },
+      { key: 'status', label: 'STATUS', format: 'pod-status' },
       { key: 'restarts', label: 'RESTARTS' },
       { key: 'ip', label: 'IP' },
       { key: 'node', label: 'NODE' },
+      { key: 'image', label: 'IMAGE', format: 'image' },
+      { key: 'owner', label: 'OWNER' },
       { key: 'age', label: 'AGE', format: 'age' },
     ],
     extract: (p) => {
@@ -308,10 +419,14 @@ const RESOURCE_SPECS: Record<string, ResourceSpec> = {
       return {
         name: p?.metadata?.name ?? '', namespace: p?.metadata?.namespace ?? '',
         ready: `${ready}/${cs.length}`,
-        status: p?.status?.phase ?? '',
+        status: podHealthStatus(p, cs),
         restarts: String(restarts),
         ip: p?.status?.podIP ?? '',
         node: p?.spec?.nodeName ?? '',
+        image: (p?.spec?.containers ?? []).map((c: any) => c?.image ?? '').filter(Boolean).join(', '),
+        // Owner kind via the Kubernetes owner-reference convention (no name matching):
+        // ReplicaSet (deployments), Job, DaemonSet, StatefulSet, or 'None' for standalone pods.
+        owner: (p?.metadata?.ownerReferences ?? [])[0]?.kind ?? 'None',
         age: ageOf(p),
       };
     },
@@ -467,7 +582,9 @@ export async function getKubeResources(
   const api = kc.makeApiClient(k8s.KubernetesObjectApi);
   try {
     const res: any = await api.list(spec.apiVersion, spec.kind, (!namespace || namespace === '*') ? undefined : namespace);
-    const items: any[] = res?.items ?? [];
+    const raw: any[] = res?.items ?? [];
+    const items = raw.filter((item) => !(spec.exclude?.(item) ?? false));
+
     return {
       kind: kindId,
       columns: spec.columns,
@@ -478,6 +595,9 @@ export async function getKubeResources(
           name: cells.name,
           namespace: cells.namespace,
           cells,
+          containers: kindId === 'pods'
+            ? (item.spec?.containers ?? []).map((container: any) => container.name).filter(Boolean)
+            : undefined,
         } as KubeResourceItem;
       }),
     };

@@ -1018,3 +1018,9 @@ html, body, #root {
 .empty-state .text {
   font-size: 14px;
 }
+
+/* Pulsing dot for watch mode (k8s view) */
+@keyframes kube-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

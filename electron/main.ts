@@ -24,7 +24,7 @@ import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/re
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
-import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeResources } from '../core/k8s.js';
+import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, getKubeResources } from '../core/k8s.js';
 import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -310,6 +310,14 @@ ipcMain.handle('k8s-deployments', async (_event, contextName: string, namespace:
 
 ipcMain.handle('k8s-deployment-detail', async (_event, contextName: string, namespace: string, name: string) => {
   return getKubeDeploymentDetail(contextName, namespace, name);
+});
+
+ipcMain.handle('k8s-deployment-pods', async (_event, contextName: string, namespace: string, name: string) => {
+  return getKubeDeploymentPods(contextName, namespace, name);
+});
+
+ipcMain.handle('k8s-pod-logs', async (_event, contextName: string, namespace: string, name: string, container?: string) => {
+  return getKubePodLogs(contextName, namespace, name, container);
 });
 
 ipcMain.handle('k8s-resources', async (_event, contextName: string, namespace: string, kind: string) => {
