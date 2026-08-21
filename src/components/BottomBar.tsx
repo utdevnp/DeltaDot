@@ -58,8 +58,9 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
   k8s: [
     { key: '↑↓ j/k', desc: 'navigate' },
     { key: '↵', desc: 'open tab' },
-    { key: 'r-click ctx', desc: 'compare' },
+    { key: 'w', desc: 'watch' },
     { key: 'r', desc: 'refresh' },
+    { key: 'r-click ctx', desc: 'compare' },
     { key: 'b / Esc', desc: 'close / back' },
     { key: 'q', desc: 'quit' },
   ],
