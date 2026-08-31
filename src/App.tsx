@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, KubeContext, KubeDeploymentSummary, KubeContextTab, KubeWorkloadTab, KubeCompareTab } from '../core/types.js';
-import { getVisibleConfigFields, WORKSPACE_COLORS } from '../core/types.js';
+import { getVisibleConfigFields, KUBE_RESOURCE_OPTIONS, WORKSPACE_COLORS } from '../core/types.js';
 import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
@@ -11,12 +11,54 @@ import { ConfigDialog } from './components/ConfigDialog';
 import { PRsView } from './components/PRsView';
 import { PRDetailView } from './components/PRDetailView';
 import { ReviewView } from './components/ReviewView';
-import { K8sView } from './components/K8sView';
+import { K8sView, KubeConfirmDialog, KubeDescribeDialog } from './components/K8sView';
 import { CommandBar } from './components/CommandBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { AddWorkspaceDialog } from './components/AddWorkspaceDialog';
 import { CloneDialog } from './components/CloneDialog';
+
+function mergeKubeLogSnapshot(previous: string, next: string): string {
+  if (!previous) return next;
+  if (!next || next === previous) return previous;
+  if (next.startsWith(previous)) return next;
+  if (previous.endsWith(next)) return previous;
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    if (previous.slice(-length) === next.slice(0, length)) {
+      return previous + next.slice(length);
+    }
+  }
+  return `${previous}${previous.endsWith('\n') ? '' : '\n'}${next}`;
+}
+
+function containerStatusMap(json: string): Record<string, string> {
+  try {
+    const pod = JSON.parse(json) as any;
+    return Object.fromEntries((pod?.status?.containerStatuses ?? []).map((container: any) => {
+      const waiting = container?.state?.waiting;
+      const terminated = container?.state?.terminated;
+      const status = waiting?.reason
+        ?? (terminated ? (terminated.exitCode === 0 ? 'Succeeded' : (terminated.reason || 'Error')) : undefined)
+        ?? (container?.state?.running ? (container.ready ? 'Running' : 'Running (not ready)') : 'Unknown');
+      return [container.name, status];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+type KubeConfirmAction = {
+  type: 'deployment' | 'all-deployments' | 'delete-resource';
+  context: string;
+  namespace: string;
+  name?: string;
+  kind?: string;
+  kindLabel?: string;
+  tabId: string;
+};
+
+type StatusTone = 'success' | 'error' | 'warning';
 
 export function App() {
   const [cfg, setCfg] = useState<AppConfig | null>(null);
@@ -31,6 +73,7 @@ export function App() {
   const [syncProgress, setSyncProgress] = useState({ done: 0, total: 0 });
   const [workspacePath, setWorkspacePath] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
+  const [statusTone, setStatusTone] = useState<StatusTone>('success');
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Workspace management
@@ -39,9 +82,10 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Auto-clear status message after 8 seconds
-  const showStatus = useCallback((msg: string, isError = false) => {
+  const showStatus = useCallback((msg: string, isError = false, isWarning = false) => {
     if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
     setStatusMessage(msg);
+    setStatusTone(isError ? 'error' : isWarning ? 'warning' : 'success');
     if (!isError) {
       statusTimerRef.current = setTimeout(() => setStatusMessage(''), 8000);
     }
@@ -90,6 +134,8 @@ export function App() {
   const [kubeActiveTab, setKubeActiveTab] = useState(''); // '' | 'compare' | context/workload tab id
   const [kubeCompareTab, setKubeCompareTab] = useState<KubeCompareTab | null>(null);
   const [kubeError, setKubeError] = useState('');
+  const [kubeConfirm, setKubeConfirm] = useState<KubeConfirmAction | null>(null);
+  const [kubeDescription, setKubeDescription] = useState<{ title: string; json: string; query: string; error?: string } | null>(null);
 
   // Recognize which GitHub account the token belongs to
   useEffect(() => {
@@ -857,6 +903,66 @@ export function App() {
     setKubeContextTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, selected: i } : t));
   }, []);
 
+  const requestKubeRestart = useCallback((all: boolean) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    if (!tab || tab.kind !== 'deployments') return;
+    const row = tab.resources.items[tab.selected];
+    if (!all && !row) return;
+    setKubeConfirm({
+      type: all ? 'all-deployments' : 'deployment',
+      context: tab.context,
+      namespace: tab.namespace,
+      name: row?.name,
+      tabId: tab.id,
+    });
+  }, []);
+
+  const confirmKubeRestart = useCallback(async () => {
+    const action = kubeConfirm;
+    setKubeConfirm(null);
+    if (!action) return;
+    try {
+      if (action.type === 'delete-resource' && action.name && action.kind) {
+        await window.api.k8sDeleteResource(action.context, action.namespace, action.kind as any, action.name);
+        showStatus(`Deleted ${action.kindLabel?.toLowerCase() ?? 'resource'} ${action.name}`);
+      } else if (action.type === 'deployment' && action.name) {
+        await window.api.k8sRestartDeployment(action.context, action.namespace, action.name);
+        showStatus(`Restart requested for ${action.name}`);
+      } else {
+        const count = await window.api.k8sRestartAllDeployments(action.context, action.namespace);
+        showStatus(`Restart requested for ${count} deployment${count === 1 ? '' : 's'}`);
+      }
+      refreshKubeTabRef.current(action.tabId);
+    } catch (err) {
+      showStatus(err instanceof Error ? err.message : String(err), true);
+    }
+  }, [kubeConfirm, showStatus]);
+
+  const requestKubeResourceDelete = useCallback(() => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    if (!tab || !KUBE_RESOURCE_OPTIONS.some((option) => option.id === tab.kind)) return;
+    const row = tab.resources.items[tab.selected];
+    if (!row) return;
+    const kindLabel = KUBE_RESOURCE_OPTIONS.find((option) => option.id === tab.kind)?.label ?? tab.kind;
+    setKubeConfirm({ type: 'delete-resource', context: tab.context, namespace: row.namespace, name: row.name, kind: tab.kind, kindLabel, tabId: tab.id });
+  }, []);
+
+  const describeKubeSelection = useCallback(async () => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    if (!tab || !KUBE_RESOURCE_OPTIONS.some((option) => option.id === tab.kind)) return;
+    const row = tab.resources.items[tab.selected];
+    if (!row) return;
+    const kindLabel = KUBE_RESOURCE_OPTIONS.find((option) => option.id === tab.kind)?.label ?? tab.kind;
+    const qualifiedName = row.namespace ? `${row.namespace}/${row.name}` : row.name;
+    setKubeDescription({ title: `${kindLabel.replace(/s$/, '')} ${qualifiedName}`, json: '', query: '' });
+    try {
+      const json = await window.api.k8sDescribeResource(tab.context, row.namespace, tab.kind, row.name);
+      setKubeDescription((prev) => prev ? { ...prev, json } : prev);
+    } catch (err) {
+      setKubeDescription((prev) => prev ? { ...prev, error: err instanceof Error ? err.message : String(err) } : prev);
+    }
+  }, []);
+
   // Open a deployment in its own workload tab (reuses the tab if already open).
   const openKubeWorkload = useCallback(async (i: number) => {
     const tab = kubeContextTabs.find((t) => t.id === kubeActiveTab) ?? kubeContextTabs[0];
@@ -886,6 +992,90 @@ export function App() {
     }
   }, [kubeActiveTab, kubeContextTabs, kubeWorkloadTabs]);
 
+  const openKubeContextPod = useCallback(async (i: number) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    const pod = tab?.resources.items[i];
+    if (!tab || !pod || tab.kind !== 'pods') return;
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tab.id ? {
+      ...t,
+      podDrilldown: {
+        podName: pod.name,
+        namespace: pod.namespace,
+        containers: pod.containers ?? [],
+        containerStatuses: pod.containerStatuses,
+        selectedContainer: 0,
+      },
+    } : t));
+    setKubeActiveTab(tab.id);
+    try {
+      const json = await window.api.k8sDescribeResource(tab.context, pod.namespace, 'pods', pod.name);
+      const statuses = containerStatusMap(json);
+      setKubeContextTabs((prev) => prev.map((t) => t.id === tab.id && t.podDrilldown?.podName === pod.name
+        ? { ...t, podDrilldown: { ...t.podDrilldown, containerStatuses: statuses } }
+        : t));
+    } catch {
+      // The container list remains usable even when status lookup is unavailable.
+    }
+  }, []);
+
+  const selectKubeContextContainer = useCallback((i: number) => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current && t.podDrilldown ? {
+      ...t, podDrilldown: { ...t.podDrilldown, selectedContainer: i },
+    } : t));
+  }, []);
+
+  const openKubeContextContainerLogs = useCallback(async (i?: number) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    const drilldown = tab?.podDrilldown;
+    if (!tab || !drilldown) return;
+    const container = drilldown.containers[i ?? drilldown.selectedContainer];
+    if (!container) return;
+    const id = `${tab.context}/${drilldown.namespace}/${drilldown.podName}/${container}/logs`;
+    const existing = kubeWorkloadTabsRef.current.find((t) => t.id === id);
+    if (existing) { setKubeActiveTab(id); return; }
+    const logTab: KubeWorkloadTab = {
+      id, context: tab.context, name: drilldown.podName, namespace: drilldown.namespace,
+      label: `log ${drilldown.podName}/${container}`, mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
+    };
+    setKubeWorkloadTabs((prev) => [...prev, logTab]);
+    setKubeActiveTab(id);
+    try {
+      const logs = await window.api.k8sPodLogs(tab.context, drilldown.namespace, drilldown.podName, container);
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, logs, loading: false, logsLoading: false } : t));
+    } catch (err) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, logsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
+
+  const closeKubePodDrilldown = useCallback(() => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, podDrilldown: undefined } : t));
+  }, []);
+
+  const toggleKubeLogWatch = useCallback((enabled: boolean) => {
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, watch: enabled } : t));
+  }, []);
+
+  const toggleKubeLogWrap = useCallback((enabled: boolean) => {
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, wrap: enabled } : t));
+  }, []);
+
+  const setKubeLogWatchInterval = useCallback((seconds: number) => {
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, watchInterval: Math.max(1, seconds) } : t));
+  }, []);
+
+  const refreshKubeLogs = useCallback(async () => {
+    const tab = kubeWorkloadTabsRef.current.find((t) => t.id === kubeActiveTabRef.current && t.mode === 'pod-logs');
+    if (!tab || !tab.container) return;
+    try {
+      const logs = await window.api.k8sPodLogs(tab.context, tab.namespace, tab.name, tab.container);
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id
+        ? { ...t, logs: mergeKubeLogSnapshot(t.logs ?? '', logs), error: '' }
+        : t));
+    } catch (err) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
+
   const selectKubeWorkloadPod = useCallback((workloadId: string, i: number) => {
     setKubeWorkloadTabs((prev) => prev.map((t) => t.id === workloadId ? { ...t, selectedPod: i } : t));
   }, []);
@@ -909,7 +1099,8 @@ export function App() {
     }
     const logTab: KubeWorkloadTab = {
       id, context: workload.context, name: pod.name, namespace: pod.namespace,
-      mode: 'pod-logs', detail: null, logs: '', loading: true, logsLoading: true,
+      label: `log ${pod.name}${container ? `/${container}` : ''}`,
+      mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
     setKubeActiveTab(id);
@@ -934,7 +1125,7 @@ export function App() {
     }
     const logTab: KubeWorkloadTab = {
       id, context: containerTab.context, name: containerTab.name, namespace: containerTab.namespace,
-      mode: 'pod-logs', detail: null, logs: '', loading: true, logsLoading: true,
+      mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
     setKubeActiveTab(id);
@@ -1036,11 +1227,21 @@ export function App() {
       return;
     }
     if (kubeWorkloadTabs.some((t) => t.id === id)) {
+      const closingWorkload = kubeWorkloadTabs.find((t) => t.id === id);
       setKubeWorkloadTabs((prev) => {
         const next = prev.filter((t) => t.id !== id);
         if (kubeActiveTab === id) setKubeActiveTab(fallbackId());
         return next;
       });
+      // A context pod drilldown is only needed while its log is open. Clear
+      // it when closing that log so the next pod starts with fresh state.
+      if (closingWorkload?.mode === 'pod-logs') {
+        setKubeContextTabs((prev) => prev.map((t) => t.context === closingWorkload.context
+          && t.podDrilldown?.podName === closingWorkload.name
+          && t.podDrilldown.namespace === closingWorkload.namespace
+          ? { ...t, podDrilldown: undefined }
+          : t));
+      }
       return;
     }
     // Context tab — keep at least one open.
@@ -1092,6 +1293,12 @@ export function App() {
   loadKubeContextsRef.current = loadKubeContexts;
   const openKubeWorkloadRef = useRef(openKubeWorkload);
   openKubeWorkloadRef.current = openKubeWorkload;
+  const openKubeContextPodRef = useRef(openKubeContextPod);
+  openKubeContextPodRef.current = openKubeContextPod;
+  const selectKubeContextContainerRef = useRef(selectKubeContextContainer);
+  selectKubeContextContainerRef.current = selectKubeContextContainer;
+  const openKubeContextContainerLogsRef = useRef(openKubeContextContainerLogs);
+  openKubeContextContainerLogsRef.current = openKubeContextContainerLogs;
   const openKubePodContainersRef = useRef(openKubePodContainers);
   openKubePodContainersRef.current = openKubePodContainers;
   const openKubeContainerLogsRef = useRef(openKubeContainerLogs);
@@ -1110,10 +1317,29 @@ export function App() {
   handleKubeTabWatchToggleRef.current = handleKubeTabWatchToggle;
   const closeActiveKubeTabRef = useRef(closeActiveKubeTab);
   closeActiveKubeTabRef.current = closeActiveKubeTab;
+  const closeKubePodDrilldownRef = useRef(closeKubePodDrilldown);
+  closeKubePodDrilldownRef.current = closeKubePodDrilldown;
+  const toggleKubeLogWatchRef = useRef(toggleKubeLogWatch);
+  toggleKubeLogWatchRef.current = toggleKubeLogWatch;
+  const toggleKubeLogWrapRef = useRef(toggleKubeLogWrap);
+  toggleKubeLogWrapRef.current = toggleKubeLogWrap;
+  const requestKubeRestartRef = useRef(requestKubeRestart);
+  requestKubeRestartRef.current = requestKubeRestart;
+  const describeKubeSelectionRef = useRef(describeKubeSelection);
+  describeKubeSelectionRef.current = describeKubeSelection;
+  const confirmKubeRestartRef = useRef(confirmKubeRestart);
+  confirmKubeRestartRef.current = confirmKubeRestart;
+  const requestKubeResourceDeleteRef = useRef(requestKubeResourceDelete);
+  requestKubeResourceDeleteRef.current = requestKubeResourceDelete;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (inputMode !== 'none') return;
+      if (kubeDescription && e.key === 'Escape') {
+        e.preventDefault();
+        setKubeDescription(null);
+        return;
+      }
       // Never hijack keys while typing in an input/select (tab rename, watch interval, …)
       const evtTarget = e.target as HTMLElement | null;
       if (evtTarget && (evtTarget.tagName === 'INPUT' || evtTarget.tagName === 'TEXTAREA' || evtTarget.tagName === 'SELECT')) return;
@@ -1121,6 +1347,16 @@ export function App() {
       if (showCloneDialog) return;
       if (showAddWorkspace) return;
       if (editWorkspace) return;
+      if (kubeConfirm) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setKubeConfirm(null);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          confirmKubeRestartRef.current();
+        }
+        return;
+      }
 
       // Global workspace shortcuts ('w' switches workspace EXCEPT in the k8s
       // view, where 'w' toggles watch mode on the active context tab).
@@ -1199,6 +1435,9 @@ export function App() {
               }
               break;
             }
+            case 'r':
+              if (repos[selectedRepo]) syncOneRef.current(repos[selectedRepo].path);
+              break;
             case 'e':
               setShowConfig(true);
               break;
@@ -1356,8 +1595,8 @@ export function App() {
               }
               break;
             }
-            case 'Enter': case 'r': {
-              // Enter behaves like 'r': open the AI review for the selected PR
+            case 'Enter': {
+              // Enter opens the AI review for the selected PR.
               e.preventDefault();
               const pr = prs[selectedPR];
               if (pr && repos.length > 0) {
@@ -1411,6 +1650,11 @@ export function App() {
               }
               break;
             }
+            case 'r':
+              e.preventDefault();
+              if (prAllReposRef.current) fetchAllPRsRef.current();
+              else if (repos[selectedRepo]) fetchPRsForRepoRef.current(repos[selectedRepo].path);
+              break;
             case 'b': case 'Escape':
               setView('list');
               break;
@@ -1499,19 +1743,21 @@ export function App() {
         case 'k8s': {
           const ctxTab = kubeContextTabs.find((t) => t.id === kubeActiveTab) ?? kubeContextTabs[0];
           const activeWorkload = kubeWorkloadTabs.find((t) => t.id === kubeActiveTab);
-          const onContextList = !!ctxTab && kubeActiveTab !== 'compare' && !activeWorkload;
+          const onContextList = !!ctxTab && kubeActiveTab !== 'compare' && !activeWorkload && !ctxTab.podDrilldown;
           switch (e.key) {
             case 'j': case 'ArrowDown':
               e.preventDefault();
               if (onContextList) selectKubeDeployment(Math.min(ctxTab.selected + 1, ctxTab.resources.items.length - 1));
               else if (activeWorkload?.pods?.items.length) selectKubeWorkloadPodRef.current(activeWorkload.id, Math.min((activeWorkload.selectedPod ?? 0) + 1, activeWorkload.pods.items.length - 1));
               else if (activeWorkload?.containers?.length) selectKubeWorkloadContainerRef.current(activeWorkload.id, Math.min((activeWorkload.selectedContainer ?? 0) + 1, activeWorkload.containers.length - 1));
+              else if (ctxTab?.podDrilldown?.containers.length) selectKubeContextContainerRef.current(Math.min(ctxTab.podDrilldown.selectedContainer + 1, ctxTab.podDrilldown.containers.length - 1));
               break;
             case 'k': case 'ArrowUp':
               e.preventDefault();
               if (onContextList) selectKubeDeployment(Math.max(ctxTab.selected - 1, 0));
               else if (activeWorkload?.pods?.items.length) selectKubeWorkloadPodRef.current(activeWorkload.id, Math.max((activeWorkload.selectedPod ?? 0) - 1, 0));
               else if (activeWorkload?.containers?.length) selectKubeWorkloadContainerRef.current(activeWorkload.id, Math.max((activeWorkload.selectedContainer ?? 0) - 1, 0));
+              else if (ctxTab?.podDrilldown?.containers.length) selectKubeContextContainerRef.current(Math.max(ctxTab.podDrilldown.selectedContainer - 1, 0));
               break;
             case 'g':
               if (!e.shiftKey && onContextList) selectKubeDeployment(0);
@@ -1522,24 +1768,53 @@ export function App() {
             case 'Enter':
               e.preventDefault();
               if (onContextList && ctxTab.resources.items[ctxTab.selected]) {
-                openKubeWorkloadRef.current(ctxTab.selected);
+                if (ctxTab.kind === 'pods') openKubeContextPodRef.current(ctxTab.selected);
+                else if (ctxTab.kind === 'deployments') openKubeWorkloadRef.current(ctxTab.selected);
               } else if (activeWorkload?.mode === 'deployment') {
                 openKubePodContainersRef.current(activeWorkload.id, activeWorkload.selectedPod ?? 0);
               } else if (activeWorkload?.mode === 'pod-containers') {
                 openKubeContainerLogsRef.current(activeWorkload.id, activeWorkload.selectedContainer ?? 0);
+              } else if (ctxTab?.podDrilldown) {
+                openKubeContextContainerLogsRef.current(ctxTab.podDrilldown.selectedContainer);
               }
               break;
             case 'r':
-              if (ctxTab) refreshKubeTabRef.current(ctxTab.id);
+              if (onContextList && ctxTab.kind === 'deployments') requestKubeRestartRef.current(false);
+              else if (ctxTab) refreshKubeTabRef.current(ctxTab.id);
+              break;
+            case 'R':
+              if (onContextList && ctxTab.kind === 'deployments') {
+                e.preventDefault();
+                requestKubeRestartRef.current(true);
+              }
+              break;
+            case 'd':
+              if (onContextList && ctxTab && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                requestKubeResourceDeleteRef.current();
+              } else if (onContextList && ctxTab) {
+                e.preventDefault();
+                describeKubeSelectionRef.current();
+              }
               break;
             case 'w':
-              if (ctxTab) {
+              if (activeWorkload?.mode === 'pod-logs') {
+                e.preventDefault();
+                toggleKubeLogWatchRef.current(!activeWorkload.watch);
+              } else if (ctxTab) {
                 e.preventDefault();
                 handleKubeTabWatchToggleRef.current(ctxTab.id, !ctxTab.watch);
               }
               break;
+            case 'z':
+              if (activeWorkload?.mode === 'pod-logs') {
+                e.preventDefault();
+                toggleKubeLogWrapRef.current(!activeWorkload.wrap);
+              }
+              break;
             case 'b': case 'Escape':
-              closeActiveKubeTabRef.current();
+              if (ctxTab?.podDrilldown) closeKubePodDrilldownRef.current();
+              else closeActiveKubeTabRef.current();
               break;
             case 'q':
               window.api.getAppInfo().then(() => window.close());
@@ -1552,7 +1827,7 @@ export function App() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext, kubeContexts, kubeContextTabs, kubeWorkloadTabs, kubeActiveTab, selectKubeDeployment]);
+  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext, kubeContexts, kubeContextTabs, kubeWorkloadTabs, kubeActiveTab, kubeConfirm, selectKubeDeployment]);
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
@@ -1786,6 +2061,14 @@ export function App() {
             onSilentRefreshTab={silentRefreshKubeTab}
             onSelect={selectKubeDeployment}
             onOpenWorkload={openKubeWorkload}
+            onOpenPod={openKubeContextPod}
+            onSelectContextContainer={selectKubeContextContainer}
+            onOpenContextContainerLogs={openKubeContextContainerLogs}
+            onClosePodDrilldown={closeKubePodDrilldown}
+            onToggleLogWatch={toggleKubeLogWatch}
+            onLogWatchInterval={setKubeLogWatchInterval}
+            onRefreshLogs={refreshKubeLogs}
+            onToggleLogWrap={toggleKubeLogWrap}
             onSelectWorkloadPod={selectKubeWorkloadPod}
             onOpenPodLogs={openKubePodContainers}
             onSelectWorkloadContainer={selectKubeWorkloadContainer}
@@ -1841,20 +2124,27 @@ export function App() {
             </div>
           </div>
 
-          <BottomBar currentView={view} />
+          <BottomBar
+            currentView={view}
+            k8sMenuMode={view !== 'k8s' ? undefined : (() => {
+              const activeWorkload = kubeWorkloadTabs.find((tab) => tab.id === kubeActiveTab);
+              if (activeWorkload?.mode === 'pod-logs') return 'logs' as const;
+              if (activeWorkload) return 'workload' as const;
+              const activeContext = kubeContextTabs.find((tab) => tab.id === kubeActiveTab);
+              if (activeContext?.podDrilldown) return 'pod-drilldown' as const;
+              if (activeContext?.kind === 'deployments') return 'deployments' as const;
+              if (activeContext?.kind === 'pods') return 'pods' as const;
+              if (activeContext?.kind === 'jobs') return 'jobs' as const;
+              return 'other' as const;
+            })()}
+          />
 
           {statusMessage && !statusMessage.includes('Loading') && (
             <div style={{
               padding: '6px 16px',
-              background: statusMessage.toLowerCase().includes('fail') || statusMessage.toLowerCase().includes('error') || statusMessage.toLowerCase().includes('not')
-                ? 'var(--tint-red)'
-                : 'var(--tint-blue)',
-              borderTop: statusMessage.toLowerCase().includes('fail') || statusMessage.toLowerCase().includes('error') || statusMessage.toLowerCase().includes('not')
-                ? '1px solid var(--border-red)'
-                : '1px solid var(--border-blue)',
-              color: statusMessage.toLowerCase().includes('fail') || statusMessage.toLowerCase().includes('error') || statusMessage.toLowerCase().includes('not')
-                ? 'var(--accent-red)'
-                : 'var(--accent-blue)',
+              background: statusTone === 'error' ? 'var(--tint-red)' : statusTone === 'warning' ? 'var(--tint-yellow)' : 'var(--tint-green)',
+              borderTop: statusTone === 'error' ? '1px solid var(--border-red)' : statusTone === 'warning' ? '1px solid var(--border-yellow)' : '1px solid var(--border-green)',
+              color: statusTone === 'error' ? 'var(--accent-red)' : statusTone === 'warning' ? 'var(--accent-yellow)' : 'var(--accent-green)',
               fontSize: 12,
               flexShrink: 0,
               display: 'flex',
@@ -1872,6 +2162,7 @@ export function App() {
           onSwitchWorkspace={switchWorkspace}
           onOpenConfig={() => setShowConfig(true)}
           statusMessage={statusMessage}
+          statusTone={statusTone}
         />
       )}
 
@@ -1929,6 +2220,34 @@ export function App() {
           workspacePath={workspacePath}
           onClose={() => setShowCloneDialog(false)}
           onCloned={handleCloned}
+        />
+      )}
+
+      {kubeConfirm && (
+        <KubeConfirmDialog
+          title={kubeConfirm.type === 'delete-resource' ? `Confirm ${kubeConfirm.kindLabel?.toLowerCase() ?? 'resource'} deletion` : 'Confirm deployment restart'}
+          message={kubeConfirm.type === 'all-deployments'
+            ? `Restart all deployments in ${kubeConfirm.context}/${kubeConfirm.namespace}?`
+            : kubeConfirm.type === 'delete-resource'
+              ? `Delete ${kubeConfirm.kindLabel?.toLowerCase() ?? 'resource'} ${kubeConfirm.namespace ? `${kubeConfirm.namespace}/` : ''}${kubeConfirm.name}?`
+              : `Restart deployment ${kubeConfirm.namespace}/${kubeConfirm.name}?`}
+          warning={kubeConfirm.type === 'delete-resource'
+            ? 'This permanently deletes the selected Kubernetes resource and cannot be undone.'
+            : 'This updates the deployment pod template and triggers a rolling restart.'}
+          confirmLabel={kubeConfirm.type === 'delete-resource' ? 'Delete' : 'Restart'}
+          onConfirm={confirmKubeRestart}
+          onCancel={() => setKubeConfirm(null)}
+        />
+      )}
+
+      {kubeDescription && (
+        <KubeDescribeDialog
+          title={kubeDescription.title}
+          json={kubeDescription.json}
+          query={kubeDescription.query}
+          error={kubeDescription.error}
+          onQueryChange={(query) => setKubeDescription((prev) => prev ? { ...prev, query } : prev)}
+          onClose={() => setKubeDescription(null)}
         />
       )}
 

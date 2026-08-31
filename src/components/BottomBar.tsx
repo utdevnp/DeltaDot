@@ -3,12 +3,14 @@ import type { View } from '../../core/types.js';
 
 interface BottomBarProps {
   currentView: View;
+  k8sMenuMode?: 'deployments' | 'pods' | 'jobs' | 'pod-drilldown' | 'workload' | 'logs' | 'other';
 }
 
 const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
   list: [
     { key: '↑↓ j/k', desc: 'navigate' },
     { key: '↵ / c', desc: 'commits' },
+    { key: 'r', desc: 'refresh' },
     { key: 's', desc: 'sync' },
     { key: 'S', desc: 'sync all' },
     { key: 'P', desc: 'PRs' },
@@ -40,6 +42,7 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
   prs: [
     { key: '↑↓ j/k', desc: 'navigate' },
     { key: '↵', desc: 'detail' },
+    { key: 'r', desc: 'refresh' },
     { key: 'f', desc: 'filter' },
     { key: 'R', desc: 'review' },
     { key: 'S', desc: 'sync + refresh' },
@@ -59,15 +62,34 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
     { key: '↑↓ j/k', desc: 'navigate' },
     { key: '↵', desc: 'open tab' },
     { key: 'w', desc: 'watch' },
-    { key: 'r', desc: 'refresh' },
+    { key: 'r', desc: 'restart deployment' },
+    { key: 'R', desc: 'restart all' },
+    { key: 'd', desc: 'describe JSON' },
+    { key: 'z', desc: 'wrap logs' },
     { key: 'r-click ctx', desc: 'compare' },
     { key: 'b / Esc', desc: 'close / back' },
     { key: 'q', desc: 'quit' },
   ],
 };
 
-export function BottomBar({ currentView }: BottomBarProps) {
-  const keys = KEYBINDINGS[currentView] ?? [];
+export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
+  let keys = KEYBINDINGS[currentView] ?? [];
+  if (currentView === 'k8s') {
+    const common = [
+      { key: '↑↓ j/k', desc: 'navigate' },
+      { key: '↵', desc: 'open' },
+      { key: 'b / Esc', desc: 'close / back' },
+      { key: 'q', desc: 'quit' },
+    ];
+    if (k8sMenuMode === 'deployments') keys = [...common.slice(0, 2), { key: 'w', desc: 'watch' }, { key: 'r', desc: 'restart deployment' }, { key: 'R', desc: 'restart all' }, { key: 'd', desc: 'describe JSON' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
+    else if (k8sMenuMode === 'pods') keys = [...common.slice(0, 2), { key: 'w', desc: 'watch' }, { key: 'r', desc: 'refresh' }, { key: 'd', desc: 'describe JSON' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
+    else if (k8sMenuMode === 'jobs') keys = [...common.slice(0, 2), { key: 'r', desc: 'refresh' }, { key: 'd', desc: 'describe JSON' }, { key: '⌘/Ctrl+d', desc: 'delete resource' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
+    else if (k8sMenuMode === 'logs') keys = [...common.slice(0, 1), { key: 'w', desc: 'watch logs' }, { key: 'z', desc: 'wrap logs' }, ...common.slice(2)];
+    else if (k8sMenuMode === 'pod-drilldown') keys = [...common.slice(0, 2), ...common.slice(2)];
+    else if (k8sMenuMode === 'workload') keys = [...common.slice(0, 2), { key: 'r', desc: 'refresh' }, ...common.slice(2)];
+    else if (k8sMenuMode === 'other') keys = [...common.slice(0, 2), { key: 'd', desc: 'describe JSON' }, { key: '⌘/Ctrl+d', desc: 'delete resource' }, ...common.slice(2)];
+    else keys = common;
+  }
 
   return (
     <div className="bottom-bar">

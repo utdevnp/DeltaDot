@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { homedir } from 'os';
-import type { AppConfig, RepoState, CacheFile, Provider, CommitDetail, PR, PRDetail, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceList } from '../core/types.js';
+import type { AppConfig, RepoState, CacheFile, Provider, CommitDetail, PR, PRDetail, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceKind, KubeResourceList } from '../core/types.js';
 
 export interface DeltaDotAPI {
   homeDir: string;
@@ -52,6 +52,11 @@ export interface DeltaDotAPI {
   k8sDeploymentDetail: (contextName: string, namespace: string, name: string) => Promise<KubeDeploymentDetail>;
   k8sDeploymentPods: (contextName: string, namespace: string, name: string) => Promise<KubeResourceList>;
   k8sPodLogs: (contextName: string, namespace: string, name: string, container?: string) => Promise<string>;
+  k8sRestartDeployment: (contextName: string, namespace: string, name: string) => Promise<void>;
+  k8sRestartAllDeployments: (contextName: string, namespace: string) => Promise<number>;
+  k8sDeleteJob: (contextName: string, namespace: string, name: string) => Promise<void>;
+  k8sDeleteResource: (contextName: string, namespace: string, kind: KubeResourceKind, name: string) => Promise<void>;
+  k8sDescribeResource: (contextName: string, namespace: string, kind: KubeResourceKind, name: string) => Promise<string>;
   k8sResources: (contextName: string, namespace: string, kind: string) => Promise<KubeResourceList>;
   loadKubeContext: () => Promise<string | null>;
   saveKubeContext: (contextName: string) => Promise<void>;
@@ -122,6 +127,11 @@ const api: DeltaDotAPI = {
   k8sDeploymentDetail: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-detail', contextName, namespace, name),
   k8sDeploymentPods: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-pods', contextName, namespace, name),
   k8sPodLogs: (contextName, namespace, name, container) => ipcRenderer.invoke('k8s-pod-logs', contextName, namespace, name, container),
+  k8sRestartDeployment: (contextName, namespace, name) => ipcRenderer.invoke('k8s-restart-deployment', contextName, namespace, name),
+  k8sRestartAllDeployments: (contextName, namespace) => ipcRenderer.invoke('k8s-restart-all-deployments', contextName, namespace),
+  k8sDeleteJob: (contextName, namespace, name) => ipcRenderer.invoke('k8s-delete-job', contextName, namespace, name),
+  k8sDeleteResource: (contextName, namespace, kind, name) => ipcRenderer.invoke('k8s-delete-resource', contextName, namespace, kind, name),
+  k8sDescribeResource: (contextName, namespace, kind, name) => ipcRenderer.invoke('k8s-describe-resource', contextName, namespace, kind, name),
   k8sResources: (contextName, namespace, kind) => ipcRenderer.invoke('k8s-resources', contextName, namespace, kind),
   loadKubeContext: () => ipcRenderer.invoke('load-kube-context'),
   saveKubeContext: (contextName) => ipcRenderer.invoke('save-kube-context', contextName),

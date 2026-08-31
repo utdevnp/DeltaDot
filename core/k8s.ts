@@ -11,6 +11,7 @@ import type {
   KubeEnvVar,
   KubeProbe,
   KubeResourceColumn,
+  KubeResourceKind,
   KubeResourceItem,
   KubeResourceList,
   KubeResourceSpec,
@@ -268,16 +269,19 @@ export async function getKubeDeploymentPods(
     const pods = ((res.items ?? []) as any[]).sort((a, b) =>
       String(a.metadata?.name ?? '').localeCompare(String(b.metadata?.name ?? '')),
     );
+    const items = pods.map((pod) => ({
+      key: `${pod.metadata?.namespace ?? namespace}/${pod.metadata?.name ?? ''}`,
+      name: pod.metadata?.name ?? '',
+      namespace: pod.metadata?.namespace ?? namespace,
+      cells: RESOURCE_SPECS.pods.extract(pod),
+      containers: (pod.spec?.containers ?? []).map((container: any) => container.name).filter(Boolean),
+      containerStatuses: podContainerStatuses(pod),
+    } as KubeResourceItem));
+    await addPodMetrics(contextName, pods, items, namespace);
     return {
       kind: 'pods',
       columns: RESOURCE_SPECS.pods.columns,
-      items: pods.map((pod) => ({
-        key: `${pod.metadata?.namespace ?? namespace}/${pod.metadata?.name ?? ''}`,
-        name: pod.metadata?.name ?? '',
-        namespace: pod.metadata?.namespace ?? namespace,
-        cells: RESOURCE_SPECS.pods.extract(pod),
-        containers: (pod.spec?.containers ?? []).map((container: any) => container.name).filter(Boolean),
-      })),
+      items,
     };
   } catch (err) {
     throw new Error(describeError(err, contextName));
@@ -304,6 +308,91 @@ export async function getKubePodLogs(
   }
 }
 
+export async function restartKubeDeployment(
+  contextName: string,
+  namespace: string,
+  name: string,
+): Promise<void> {
+  const kc = makeConfig(contextName);
+  const apps = kc.makeApiClient(k8s.AppsV1Api);
+  try {
+    const deployment: any = await apps.readNamespacedDeployment({ name, namespace });
+    deployment.spec ??= {};
+    deployment.spec.template ??= {};
+    deployment.spec.template.metadata ??= {};
+    deployment.spec.template.metadata.annotations ??= {};
+    deployment.spec.template.metadata.annotations['kubectl.kubernetes.io/restartedAt'] = new Date().toISOString();
+    await apps.replaceNamespacedDeployment({
+      name,
+      namespace,
+      body: deployment,
+    });
+  } catch (err) {
+    throw new Error(describeError(err, contextName));
+  }
+}
+
+export async function restartAllKubeDeployments(contextName: string, namespace: string): Promise<number> {
+  const deployments = await getKubeDeployments(contextName, namespace);
+  await Promise.all(deployments.map((deployment) => restartKubeDeployment(contextName, deployment.namespace, deployment.name)));
+  return deployments.length;
+}
+
+export async function deleteKubeJob(
+  contextName: string,
+  namespace: string,
+  name: string,
+): Promise<void> {
+  const kc = makeConfig(contextName);
+  try {
+    await kc.makeApiClient(k8s.BatchV1Api).deleteNamespacedJob({ name, namespace });
+  } catch (err) {
+    throw new Error(describeError(err, contextName));
+  }
+}
+
+export async function deleteKubeResource(
+  contextName: string,
+  namespace: string,
+  kind: KubeResourceKind,
+  name: string,
+): Promise<void> {
+  const spec = RESOURCE_SPECS[kind];
+  if (!spec) throw new Error(`Unsupported Kubernetes resource kind: ${kind}`);
+  const kc = makeConfig(contextName);
+  try {
+    await kc.makeApiClient(k8s.KubernetesObjectApi).delete({
+      apiVersion: spec.apiVersion,
+      kind: spec.kind,
+      metadata: { name, ...(spec.namespaced === false ? {} : { namespace }) },
+    });
+  } catch (err) {
+    throw new Error(describeError(err, contextName));
+  }
+}
+
+export async function describeKubeResource(
+  contextName: string,
+  namespace: string,
+  kind: KubeResourceKind,
+  name: string,
+): Promise<string> {
+  const kc = makeConfig(contextName);
+  try {
+    const spec = RESOURCE_SPECS[kind];
+    if (!spec) throw new Error(`Unsupported Kubernetes resource kind: ${kind}`);
+    const resourceApi = kc.makeApiClient(k8s.KubernetesObjectApi);
+    const resource = await resourceApi.read({
+      apiVersion: spec.apiVersion,
+      kind: spec.kind,
+      metadata: { name, ...(spec.namespaced === false ? {} : { namespace }) },
+    });
+    return JSON.stringify(resource, null, 2);
+  } catch (err) {
+    throw new Error(describeError(err, contextName));
+  }
+}
+
 // ─── Generic namespace resources (pods, configmaps, secrets, …) ─────────────
 
 const EMPTY_RESOURCE: KubeResourceList = { kind: '', columns: [], items: [] };
@@ -321,9 +410,86 @@ function durationBetween(startIso: string, endIso: string): string {
   return m > 0 ? `${m}m${s}s` : `${s}s`;
 }
 
+/** Summarize the pod's container resource requests and limits for table display. */
+function podResource(pod: any, resource: 'cpu' | 'memory'): string {
+  const values = (pod?.spec?.containers ?? [])
+    .map((container: any) => {
+      const requests = container?.resources?.requests?.[resource];
+      const limits = container?.resources?.limits?.[resource];
+      if (!requests && !limits) return '';
+      if (requests && limits) return `${requests}/${limits}`;
+      return requests ? `${requests}/—` : `—/${limits}`;
+    })
+    .filter(Boolean);
+  return values.length > 0 ? values.join(', ') : '—';
+}
+
+function quantityValue(value: unknown, resource: 'cpu' | 'memory'): number | null {
+  if (value == null || value === '') return null;
+  const match = String(value).trim().match(/^(-?\d+(?:\.\d+)?)([a-zA-Z]*)$/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  if (resource === 'cpu') {
+    if (match[2] === 'n') return amount / 1e9;
+    if (match[2] === 'u') return amount / 1e6;
+    if (match[2] === 'm') return amount / 1000;
+    return amount;
+  }
+  const multipliers: Record<string, number> = { '': 1, k: 1e3, K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18, Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, Pi: 1024 ** 5, Ei: 1024 ** 6 };
+  return multipliers[match[2]] == null ? null : amount * multipliers[match[2]];
+}
+
+function formatUsage(value: number, resource: 'cpu' | 'memory'): string {
+  if (resource === 'cpu') return `${Math.round(value * 1000)}m`;
+  const units = ['B', 'Ki', 'Mi', 'Gi', 'Ti'];
+  let unit = 0;
+  let scaled = value;
+  while (scaled >= 1024 && unit < units.length - 1) { scaled /= 1024; unit += 1; }
+  return `${Number(scaled.toFixed(scaled >= 10 ? 0 : 1))}${units[unit]}`;
+}
+
+function podResourceTotal(pod: any, resource: 'cpu' | 'memory', field: 'requests' | 'limits'): number | null {
+  const values = (pod?.spec?.containers ?? [])
+    .map((container: any) => quantityValue(container?.resources?.[field]?.[resource], resource))
+    .filter((value: number | null): value is number => value != null);
+  return values.length > 0 ? values.reduce((total: number, value: number) => total + value, 0) : null;
+}
+
+async function loadPodMetrics(contextName: string, namespace?: string): Promise<Map<string, any>> {
+  const api = makeConfig(contextName).makeApiClient(k8s.KubernetesObjectApi);
+  for (const version of ['v1', 'v1beta1']) {
+    try {
+      const result: any = await api.list(`metrics.k8s.io/${version}`, 'Pod', namespace);
+      return new Map((result?.items ?? []).map((pod: any) => [`${pod?.metadata?.namespace ?? ''}/${pod?.metadata?.name ?? ''}`, pod]));
+    } catch {
+      // Older clusters expose only metrics.k8s.io/v1beta1.
+    }
+  }
+  return new Map();
+}
+
+async function addPodMetrics(contextName: string, rawPods: any[], items: KubeResourceItem[], namespace?: string): Promise<void> {
+  const metrics = await loadPodMetrics(contextName, namespace);
+  rawPods.forEach((pod, index) => {
+    const metric = metrics.get(`${pod?.metadata?.namespace ?? namespace ?? ''}/${pod?.metadata?.name ?? ''}`);
+    const item = items[index];
+    if (!metric || !item) return;
+    for (const resource of ['cpu', 'memory'] as const) {
+      const usage = (metric?.containers ?? []).map((container: any) => quantityValue(container?.usage?.[resource], resource))
+        .filter((value: number | null): value is number => value != null)
+        .reduce((total: number, value: number) => total + value, 0);
+      const limit = podResourceTotal(pod, resource, 'limits');
+      if (usage > 0) item.cells[resource] = `${formatUsage(usage, resource)}${limit != null ? `/${formatUsage(limit, resource)}` : ''}`;
+      if (limit != null && limit > 0 && usage / limit >= 0.8) item.cells[`high${resource === 'cpu' ? 'Cpu' : 'Memory'}`] = 'true';
+    }
+  });
+}
+
 interface ResourceSpec {
   apiVersion: string;
   kind: string;
+  namespaced?: boolean;
   columns: KubeResourceColumn[];
   extract: (item: any) => Record<string, string>;
   /** Return true to exclude the item from the table (e.g. migration/cronjob pods). */
@@ -376,6 +542,21 @@ function podHealthStatus(p: any, containerStatuses: any[]): string {
   return phase;
 }
 
+function containerHealthStatus(container: any): string {
+  const waiting = container?.state?.waiting;
+  const terminated = container?.state?.terminated;
+  if (waiting?.reason) return waiting.reason;
+  if (terminated) return terminated.exitCode === 0 ? 'Succeeded' : (terminated.reason || 'Error');
+  if (container?.state?.running) return container.ready ? 'Running' : 'Running (not ready)';
+  return 'Unknown';
+}
+
+function podContainerStatuses(pod: any): Record<string, string> {
+  return Object.fromEntries((pod?.status?.containerStatuses ?? []).map((container: any) => [
+    container.name, containerHealthStatus(container),
+  ]));
+}
+
 const RESOURCE_SPECS: Record<string, ResourceSpec> = {
   deployments: {
     apiVersion: 'apps/v1', kind: 'Deployment',
@@ -407,7 +588,8 @@ const RESOURCE_SPECS: Record<string, ResourceSpec> = {
       { key: 'status', label: 'STATUS', format: 'pod-status' },
       { key: 'restarts', label: 'RESTARTS' },
       { key: 'ip', label: 'IP' },
-      { key: 'node', label: 'NODE' },
+      { key: 'cpu', label: 'CPU', format: 'usage' },
+      { key: 'memory', label: 'MEMORY', format: 'usage' },
       { key: 'image', label: 'IMAGE', format: 'image' },
       { key: 'owner', label: 'OWNER' },
       { key: 'age', label: 'AGE', format: 'age' },
@@ -422,7 +604,8 @@ const RESOURCE_SPECS: Record<string, ResourceSpec> = {
         status: podHealthStatus(p, cs),
         restarts: String(restarts),
         ip: p?.status?.podIP ?? '',
-        node: p?.spec?.nodeName ?? '',
+        cpu: podResource(p, 'cpu'),
+        memory: podResource(p, 'memory'),
         image: (p?.spec?.containers ?? []).map((c: any) => c?.image ?? '').filter(Boolean).join(', '),
         // Owner kind via the Kubernetes owner-reference convention (no name matching):
         // ReplicaSet (deployments), Job, DaemonSet, StatefulSet, or 'None' for standalone pods.
@@ -569,6 +752,34 @@ const RESOURCE_SPECS: Record<string, ResourceSpec> = {
       age: ageOf(c),
     }),
   },
+  nodes: {
+    apiVersion: 'v1', kind: 'Node', namespaced: false,
+    columns: [
+      { key: 'name', label: 'NAME' },
+      { key: 'status', label: 'STATUS' },
+      { key: 'roles', label: 'ROLES' },
+      { key: 'version', label: 'VERSION' },
+      { key: 'internalIp', label: 'INTERNAL-IP' },
+      { key: 'osImage', label: 'OS-IMAGE' },
+      { key: 'age', label: 'AGE', format: 'age' },
+    ],
+    extract: (n) => {
+      const ready = (n?.status?.conditions ?? []).find((condition: any) => condition?.type === 'Ready');
+      const roles = Object.keys(n?.metadata?.labels ?? {})
+        .filter((key) => key === 'kubernetes.io/role' || key.startsWith('node-role.kubernetes.io/'))
+        .map((key) => key === 'kubernetes.io/role' ? n.metadata.labels[key] : key.replace('node-role.kubernetes.io/', ''))
+        .filter(Boolean);
+      return {
+        name: n?.metadata?.name ?? '', namespace: '',
+        status: ready?.status === 'True' ? 'Ready' : ready?.status === 'False' ? (ready.reason || 'NotReady') : 'Unknown',
+        roles: roles.length > 0 ? roles.join(', ') : '<none>',
+        version: n?.status?.nodeInfo?.kubeletVersion ?? '',
+        internalIp: (n?.status?.addresses ?? []).find((address: any) => address?.type === 'InternalIP')?.address ?? '',
+        osImage: n?.status?.nodeInfo?.osImage ?? '',
+        age: ageOf(n),
+      };
+    },
+  },
 };
 
 export async function getKubeResources(
@@ -581,25 +792,29 @@ export async function getKubeResources(
   const kc = makeConfig(contextName);
   const api = kc.makeApiClient(k8s.KubernetesObjectApi);
   try {
-    const res: any = await api.list(spec.apiVersion, spec.kind, (!namespace || namespace === '*') ? undefined : namespace);
+    const resourceNamespace = spec.namespaced === false || !namespace || namespace === '*' ? undefined : namespace;
+    const res: any = await api.list(spec.apiVersion, spec.kind, resourceNamespace);
     const raw: any[] = res?.items ?? [];
     const items = raw.filter((item) => !(spec.exclude?.(item) ?? false));
 
-    return {
-      kind: kindId,
-      columns: spec.columns,
-      items: items.map((item) => {
-        const cells = spec.extract(item);
-        return {
-          key: `${cells.namespace}/${cells.name}`,
-          name: cells.name,
-          namespace: cells.namespace,
-          cells,
+    const resourceItems = items.map((item) => {
+      const cells = spec.extract(item);
+      return {
+        key: `${cells.namespace ? `${cells.namespace}/` : ''}${cells.name}`,
+        name: cells.name,
+        namespace: cells.namespace,
+        cells,
           containers: kindId === 'pods'
             ? (item.spec?.containers ?? []).map((container: any) => container.name).filter(Boolean)
             : undefined,
-        } as KubeResourceItem;
-      }),
+          containerStatuses: kindId === 'pods' ? podContainerStatuses(item) : undefined,
+      } as KubeResourceItem;
+    });
+    if (kindId === 'pods') await addPodMetrics(contextName, items, resourceItems, resourceNamespace);
+    return {
+      kind: kindId,
+      columns: spec.columns,
+      items: resourceItems,
     };
   } catch (err) {
     throw new Error(describeError(err, contextName));

@@ -7,9 +7,10 @@ interface WelcomeScreenProps {
   onSwitchWorkspace: (ws: Workspace) => void;
   onOpenConfig: () => void;
   statusMessage: string;
+  statusTone?: 'success' | 'error' | 'warning';
 }
 
-export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace, onOpenConfig, statusMessage }: WelcomeScreenProps) {
+export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace, onOpenConfig, statusMessage, statusTone = 'error' }: WelcomeScreenProps) {
   return (
     <div style={{
       flex: 1,
@@ -52,9 +53,9 @@ export function WelcomeScreen({ workspaces, onSelectWorkspace, onSwitchWorkspace
         <div style={{
           padding: '10px 16px',
           borderRadius: 8,
-          background: 'var(--tint-red)',
-          border: '1px solid var(--border-red)',
-          color: 'var(--accent-red)',
+          background: statusTone === 'error' ? 'var(--tint-red)' : statusTone === 'warning' ? 'var(--tint-yellow)' : 'var(--tint-green)',
+          border: statusTone === 'error' ? '1px solid var(--border-red)' : statusTone === 'warning' ? '1px solid var(--border-yellow)' : '1px solid var(--border-green)',
+          color: statusTone === 'error' ? 'var(--accent-red)' : statusTone === 'warning' ? 'var(--accent-yellow)' : 'var(--accent-green)',
           fontSize: 13,
           maxWidth: 400,
           textAlign: 'center',

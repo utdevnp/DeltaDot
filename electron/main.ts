@@ -24,8 +24,8 @@ import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/re
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
-import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, getKubeResources } from '../core/k8s.js';
-import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace } from '../core/types.js';
+import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, getKubeResources, restartKubeDeployment, restartAllKubeDeployments, deleteKubeJob, deleteKubeResource, describeKubeResource } from '../core/k8s.js';
+import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace, KubeResourceKind } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -318,6 +318,26 @@ ipcMain.handle('k8s-deployment-pods', async (_event, contextName: string, namesp
 
 ipcMain.handle('k8s-pod-logs', async (_event, contextName: string, namespace: string, name: string, container?: string) => {
   return getKubePodLogs(contextName, namespace, name, container);
+});
+
+ipcMain.handle('k8s-restart-deployment', async (_event, contextName: string, namespace: string, name: string) => {
+  return restartKubeDeployment(contextName, namespace, name);
+});
+
+ipcMain.handle('k8s-restart-all-deployments', async (_event, contextName: string, namespace: string) => {
+  return restartAllKubeDeployments(contextName, namespace);
+});
+
+ipcMain.handle('k8s-delete-job', async (_event, contextName: string, namespace: string, name: string) => {
+  return deleteKubeJob(contextName, namespace, name);
+});
+
+ipcMain.handle('k8s-delete-resource', async (_event, contextName: string, namespace: string, kind: KubeResourceKind, name: string) => {
+  return deleteKubeResource(contextName, namespace, kind, name);
+});
+
+ipcMain.handle('k8s-describe-resource', async (_event, contextName: string, namespace: string, kind: KubeResourceKind, name: string) => {
+  return describeKubeResource(contextName, namespace, kind, name);
 });
 
 ipcMain.handle('k8s-resources', async (_event, contextName: string, namespace: string, kind: string) => {

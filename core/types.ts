@@ -332,10 +332,22 @@ export interface KubeWorkloadTab {
   containers?: string[];
   selectedContainer?: number;
   logs?: string;
+  container?: string;
+  watch?: boolean;
+  watchInterval?: number;
+  wrap?: boolean;
   loading: boolean;
   podsLoading?: boolean;
   logsLoading?: boolean;
   error?: string;
+}
+
+export interface KubePodDrilldown {
+  podName: string;
+  namespace: string;
+  containers: string[];
+  containerStatuses?: Record<string, string>;
+  selectedContainer: number;
 }
 
 export interface KubeCompareSide {
@@ -367,6 +379,7 @@ export interface KubeContextTab {
   selected: number;
   loading: boolean;
   error: string;
+  podDrilldown?: KubePodDrilldown;
 }
 
 // ─── Kubernetes generic resource tables (renderer-safe) ─────────────────────
@@ -374,7 +387,7 @@ export interface KubeContextTab {
 export interface KubeResourceColumn {
   key: string;
   label: string;
-  format?: 'text' | 'age' | 'ready' | 'image' | 'pod-status';
+  format?: 'text' | 'age' | 'ready' | 'image' | 'pod-status' | 'usage';
 }
 
 export interface KubeResourceItem {
@@ -382,6 +395,7 @@ export interface KubeResourceItem {
   name: string;
   namespace: string;
   cells: Record<string, string>;
+  containerStatuses?: Record<string, string>;
   loading?: boolean;
 }
 
@@ -390,6 +404,19 @@ export interface KubeResourceList {
   columns: KubeResourceColumn[];
   items: KubeResourceItem[];
 }
+
+export type KubeResourceKind =
+  | 'deployments'
+  | 'pods'
+  | 'configmaps'
+  | 'secrets'
+  | 'services'
+  | 'statefulsets'
+  | 'daemonsets'
+  | 'ingresses'
+  | 'jobs'
+  | 'cronjobs'
+  | 'nodes';
 
 export const KUBE_RESOURCE_OPTIONS: { id: string; label: string }[] = [
   { id: 'deployments', label: 'Deployments' },
@@ -402,4 +429,5 @@ export const KUBE_RESOURCE_OPTIONS: { id: string; label: string }[] = [
   { id: 'ingresses', label: 'Ingresses' },
   { id: 'jobs', label: 'Jobs' },
   { id: 'cronjobs', label: 'CronJobs' },
+  { id: 'nodes', label: 'Nodes' },
 ];
