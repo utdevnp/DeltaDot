@@ -184,6 +184,7 @@ export interface JiraIssue {
   issueType: string;
   assignee: string;
   reporter: string;
+  updatedAt?: string;
   url: string;
 }
 

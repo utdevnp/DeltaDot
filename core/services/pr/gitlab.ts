@@ -1,5 +1,5 @@
 import type { PR, PRDetail, PRCommit, PRFile } from '../../types.js';
-import { bearerHeaders } from './shared.js';
+import { apiDelay, bearerHeaders } from './shared.js';
 
 export async function fetchGitLabPRs(
   owner: string,
@@ -10,15 +10,23 @@ export async function fetchGitLabPRs(
 ): Promise<PR[]> {
   const headers = bearerHeaders(token);
   const projectId = encodeURIComponent(`${owner}/${repo}`);
-  const apiState = state === 'closed' ? 'closed' : state === 'all' ? 'all' : 'opened';
-  const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests?state=${apiState}&per_page=50`;
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    const errorBody = await res.text();
-    throw new Error(`GitLab API error ${res.status}: ${res.statusText} - ${errorBody}`);
+  const exhaustive = state === 'all-search';
+  const apiState = state === 'closed' ? 'closed' : (state === 'all' || exhaustive) ? 'all' : 'opened';
+  const data: unknown[] = [];
+  const pageCount = exhaustive ? 10 : 1;
+  for (let page = 1; page <= pageCount; page++) {
+    if (page > 1) await apiDelay();
+    const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests?state=${apiState}&per_page=100&page=${page}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      const errorBody = await res.text();
+      throw new Error(`GitLab API error ${res.status}: ${res.statusText} - ${errorBody}`);
+    }
+    const pageData = await res.json() as unknown[];
+    if (!Array.isArray(pageData)) throw new Error('Unexpected GitLab API response: Expected array');
+    data.push(...pageData);
+    if (pageData.length < 100) break;
   }
-
-  const data = await res.json() as unknown[];
   if (!Array.isArray(data)) {
     throw new Error('Unexpected GitLab API response: Expected array');
   }
@@ -35,6 +43,8 @@ export async function fetchGitLabPRs(
     repoName: repoName ?? '',
     approved: false,
   }));
+
+  if (exhaustive) return mrs;
 
   return Promise.all(mrs.map(async (mr) => {
     try {

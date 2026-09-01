@@ -749,6 +749,101 @@ export function App() {
     setPRLoading(false);
   }, [cfg, repos, prFilter]);
 
+  // Find a PR by Jira key across every repository, then open the normal review view.
+  const searchPRByJiraKey = useCallback(async (query: string) => {
+    const currentCfg = cfgRef.current;
+    const currentRepos = reposRef.current;
+    const keyMatch = query.toUpperCase().match(/\b[A-Z][A-Z0-9]+-\d+\b/);
+    const issueKey = keyMatch?.[0];
+    if (!issueKey) throw new Error('Enter a Jira ticket key such as NUVEI-123.');
+    if (!currentCfg?.token) {
+      throw new Error('API token not configured. Press e to open settings and add your token.');
+    }
+    if (currentRepos.length === 0) {
+      throw new Error('Repositories are still loading. Please wait and search again.');
+    }
+    if (!currentCfg.jiraUrl || !currentCfg.jiraEmail || !currentCfg.jiraApiToken) {
+      throw new Error('Jira is not configured. Press e to open settings and configure Jira.');
+    }
+    try {
+      const jira = await window.api.fetchJira(
+        { url: currentCfg.jiraUrl, email: currentCfg.jiraEmail, apiToken: currentCfg.jiraApiToken },
+        issueKey,
+      );
+      const repoResults = await Promise.allSettled(currentRepos.map(async (repo) => {
+        const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+        if (!remoteInfo) return [];
+        let provider = currentCfg.provider;
+        if (!provider) {
+          const remoteUrl = await window.api.getRemoteUrl(repo.path);
+          provider = await window.api.detectProvider(remoteUrl);
+        }
+        return window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, 'all-search');
+      }));
+      const queryLower = issueKey.toLowerCase();
+      const allPRs = repoResults
+        .filter((result): result is PromiseFulfilledResult<PR[]> => result.status === 'fulfilled')
+        .flatMap((result) => result.value)
+      // Jira keys are commonly placed in the PR body, so list metadata alone
+      // is not enough to find every related PR (especially older merged PRs).
+      const detailedResults = await Promise.allSettled(allPRs.map(async (pr) => {
+        const repo = currentRepos.find((item) => item.name === pr.repoName);
+        if (!repo) return { pr, detail: null };
+        const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+        if (!remoteInfo) return { pr, detail: null };
+        let provider = currentCfg.provider;
+        if (!provider) {
+          const remoteUrl = await window.api.getRemoteUrl(repo.path);
+          provider = await window.api.detectProvider(remoteUrl);
+        }
+        try {
+          const detail = await window.api.fetchPRDetail(remoteInfo.owner, pr.repoName, pr.number, provider, currentCfg.token);
+          return { pr, detail };
+        } catch {
+          // Keep list metadata usable when a historical detail request is
+          // rate-limited; title/branch matching can still find the PR.
+          return { pr, detail: null };
+        }
+      }));
+      const matches = detailedResults
+        .filter((result): result is PromiseFulfilledResult<{ pr: PR; detail: PRDetail | null }> => result.status === 'fulfilled')
+        .filter(({ pr, detail }) => `${pr.title} ${pr.sourceBranch} ${pr.repoName} ${detail?.description ?? ''}`.toLowerCase().includes(queryLower));
+      if (matches.length === 0) {
+        return { jira, prs: [] };
+      }
+      const enrichedPRs = matches.map(({ pr, detail }) => ({ ...pr, mergedAt: detail?.mergedAt, mergedBy: detail?.mergedBy }));
+      return { jira, prs: enrichedPRs };
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }, []);
+
+  const openSearchPRReview = useCallback(async (pr: PR, jira: JiraIssue) => {
+    const currentCfg = cfgRef.current;
+    const repo = reposRef.current.find((item) => item.name === pr.repoName);
+    if (!currentCfg || !repo) throw new Error('Could not locate the repository for this pull request.');
+    const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+    if (!remoteInfo) throw new Error(`Could not detect the remote repository for ${repo.name}.`);
+    const provider = currentCfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repo.path));
+    setReviewContext({ repoPath: repo.path, prNumber: pr.number, returnView: 'prs' });
+    setReviewJira(jira);
+    setReviewError('');
+    setReviewLoading(true);
+    setView('review');
+    try {
+      const detail = await window.api.fetchPRDetail(remoteInfo.owner, pr.repoName, pr.number, provider, currentCfg.token);
+      setPRs([pr]);
+      setSelectedPR(0);
+      setPRDetail(detail);
+      setReviewLoading(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setReviewError(message);
+      setReviewLoading(false);
+      throw new Error(message);
+    }
+  }, []);
+
   // ─── Kubernetes ─────────────────────────────────────────────────────────
 
   // Create a context tab (fetch its namespaces + deployments); activates it when asked.
@@ -1595,6 +1690,7 @@ export function App() {
               }
               break;
             }
+            case 'R':
             case 'Enter': {
               // Enter opens the AI review for the selected PR.
               e.preventDefault();
@@ -1954,6 +2050,8 @@ export function App() {
                 fetchPRsForRepoRef.current(repos[selectedRepo].path, f);
               }
             }}
+            onSearch={searchPRByJiraKey}
+            onReviewSearchResult={openSearchPRReview}
             onSelectPR={() => {
               const pr = prs[selectedPR];
               if (pr && repos.length > 0) {

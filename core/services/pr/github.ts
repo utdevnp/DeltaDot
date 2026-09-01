@@ -1,5 +1,5 @@
 import type { PR, PRComment, PRDetail, PRCommit, PRFile } from '../../types.js';
-import { githubHeaders, uniqueStrings } from './shared.js';
+import { apiDelay, githubHeaders, uniqueStrings } from './shared.js';
 
 export async function fetchGitHubPRs(
   owner: string,
@@ -9,14 +9,23 @@ export async function fetchGitHubPRs(
   state: string = 'open'
 ): Promise<PR[]> {
   const headers = githubHeaders(token);
-  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=${state}&per_page=50`;
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    const errorBody = await res.text();
-    throw new Error(`GitHub API error ${res.status}: ${res.statusText} - ${errorBody}`);
+  const data: unknown[] = [];
+  const exhaustive = state === 'all-search';
+  const pageCount = exhaustive ? 10 : 1;
+  for (let page = 1; page <= pageCount; page++) {
+    if (page > 1) await apiDelay();
+    const apiState = exhaustive ? 'all' : state;
+    const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=${apiState}&per_page=100&page=${page}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      const errorBody = await res.text();
+      throw new Error(`GitHub API error ${res.status}: ${res.statusText} - ${errorBody}`);
+    }
+    const pageData = await res.json() as unknown[];
+    if (!Array.isArray(pageData)) throw new Error('Unexpected GitHub API response: Expected array');
+    data.push(...pageData);
+    if (pageData.length < 100) break;
   }
-
-  const data = await res.json() as unknown[];
   if (!Array.isArray(data)) {
     throw new Error('Unexpected GitHub API response: Expected array');
   }
@@ -33,6 +42,10 @@ export async function fetchGitHubPRs(
     repoName: repoName ?? '',
     approved: false,
   }));
+
+  // Approval status is not needed for historical Jira searches and checking
+  // every old PR can exhaust the provider rate limit across large workspaces.
+  if (exhaustive) return prs;
 
   return Promise.all(prs.map(async (pr) => {
     try {

@@ -1,5 +1,5 @@
 import type { PR, PRDetail, PRCommit, PRFile } from '../../types.js';
-import { bearerHeaders } from './shared.js';
+import { apiDelay, bearerHeaders } from './shared.js';
 
 export async function fetchBitbucketPRs(
   owner: string,
@@ -9,16 +9,23 @@ export async function fetchBitbucketPRs(
   state: string = 'OPEN'
 ): Promise<PR[]> {
   const headers = bearerHeaders(token);
-  const apiState = state.toUpperCase() === 'ALL' ? 'MERGED,SUPERSEDED,OPEN' : state.toUpperCase() === 'CLOSED' ? 'DECLINED,MERGED,SUPERSEDED' : 'OPEN';
-  const url = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests?state=${apiState}&pagelen=50`;
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    const errorBody = await res.text();
-    throw new Error(`Bitbucket API error ${res.status}: ${res.statusText} - ${errorBody}`);
+  const exhaustive = state.toUpperCase() === 'ALL-SEARCH';
+  const apiState = (state.toUpperCase() === 'ALL' || exhaustive) ? 'MERGED,SUPERSEDED,OPEN' : state.toUpperCase() === 'CLOSED' ? 'DECLINED,MERGED,SUPERSEDED' : 'OPEN';
+  const data: unknown[] = [];
+  let nextUrl: string | undefined = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests?state=${apiState}&pagelen=100`;
+  let page = 0;
+  while (nextUrl && page < (exhaustive ? 10 : 1)) {
+    if (page > 0) await apiDelay();
+    const res = await fetch(nextUrl, { headers });
+    if (!res.ok) {
+      const errorBody = await res.text();
+      throw new Error(`Bitbucket API error ${res.status}: ${res.statusText} - ${errorBody}`);
+    }
+    const json = await res.json() as { values: unknown[]; next?: string };
+    if (Array.isArray(json.values)) data.push(...json.values);
+    nextUrl = exhaustive ? json.next : undefined;
+    page++;
   }
-
-  const json = await res.json() as { values: unknown[] };
-  const data = json.values;
   if (!Array.isArray(data)) {
     throw new Error('Unexpected Bitbucket API response: Expected array');
   }
@@ -42,6 +49,8 @@ export async function fetchBitbucketPRs(
       approved: false,
     };
   });
+
+  if (exhaustive) return prs;
 
   return Promise.all(prs.map(async (pr) => {
     try {

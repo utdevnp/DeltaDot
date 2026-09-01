@@ -1,3 +1,7 @@
+export function apiDelay(milliseconds = 120): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 export function bearerHeaders(token: string): Record<string, string> {
   return token ? { Authorization: token } : {};
 }

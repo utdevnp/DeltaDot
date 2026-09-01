@@ -42,6 +42,7 @@ export async function fetchJiraIssue(config: JiraConfig, issueKey: string): Prom
     issueType: (fields.issuetype?.name as string) ?? '',
     assignee: (fields.assignee?.displayName as string) ?? 'unassigned',
     reporter: (fields.reporter?.displayName as string) ?? 'unknown',
+    updatedAt: (fields.updated as string) ?? undefined,
     url: `${baseUrl}/browse/${encodeURIComponent(item.key as string)}`,
   };
 }
