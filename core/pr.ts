@@ -1,5 +1,5 @@
 import { run } from './git.js';
-import type { PR, PRDetail, Provider } from './types.js';
+import type { PRDetail, PRPage, Provider } from './types.js';
 import { timeAgo } from './utils.js';
 import { fetchPRsByProvider, fetchPRDetailByProvider, createPRCommentByProvider } from './services/api.js';
 
@@ -35,9 +35,11 @@ export async function fetchPRs(
   provider: Provider,
   token: string,
   repoName?: string,
-  state?: string
-): Promise<PR[]> {
-  return fetchPRsByProvider(owner, repo, provider, token, repoName, state);
+  state?: string,
+  page?: number,
+  pageSize?: number,
+): Promise<PRPage> {
+  return fetchPRsByProvider(owner, repo, provider, token, repoName, state, page, pageSize);
 }
 
 export async function fetchPRDetail(

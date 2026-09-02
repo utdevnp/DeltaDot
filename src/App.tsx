@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, KubeContext, KubeDeploymentSummary, KubeContextTab, KubeWorkloadTab, KubeCompareTab } from '../core/types.js';
+import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeDeploymentSummary, KubeContextTab, KubeWorkloadTab, KubeCompareTab } from '../core/types.js';
 import { getVisibleConfigFields, KUBE_RESOURCE_OPTIONS, WORKSPACE_COLORS } from '../core/types.js';
 import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
@@ -9,6 +9,7 @@ import { CommitsView } from './components/CommitsView';
 import { DetailView } from './components/DetailView';
 import { ConfigDialog } from './components/ConfigDialog';
 import { PRsView } from './components/PRsView';
+import type { PRSearchResult } from './components/PRsView';
 import { PRDetailView } from './components/PRDetailView';
 import { ReviewView } from './components/ReviewView';
 import { K8sView, KubeConfirmDialog, KubeDescribeDialog } from './components/K8sView';
@@ -17,6 +18,26 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { AddWorkspaceDialog } from './components/AddWorkspaceDialog';
 import { CloneDialog } from './components/CloneDialog';
+
+const PR_PAGE_SIZE = 10;
+type PRPagination = { page: number; hasMore: boolean };
+
+// Jira search can inspect many pages per repository. Keep the fan-out below
+// provider burst thresholds instead of starting every repository at once.
+const SEARCH_REPO_DELAY_MS: Record<Provider, number> = {
+  github: 5000,
+  gitlab: 1000,
+  bitbucket: 3600,
+};
+const SEARCH_DETAIL_DELAY_MS: Record<Provider, number> = {
+  github: 5000,
+  gitlab: 1000,
+  bitbucket: 3600,
+};
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 function mergeKubeLogSnapshot(previous: string, next: string): string {
   if (!previous) return next;
@@ -79,7 +100,8 @@ export function App() {
   // Workspace management
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Keep the workspace rail compact by default; users can expand it from the rail control.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
   // Auto-clear status message after 8 seconds
   const showStatus = useCallback((msg: string, isError = false, isWarning = false) => {
@@ -110,6 +132,7 @@ export function App() {
   const [prError, setPRError] = useState('');
   const [prFilter, setPRFilter] = useState<'open' | 'closed' | 'all'>('open');
   const [prAllRepos, setPrAllRepos] = useState(false);
+  const [prPagination, setPRPagination] = useState<Record<string, PRPagination>>({});
   const [prDetail, setPRDetail] = useState<PRDetail | null>(null);
   const [prDetailLoading, setPRDetailLoading] = useState(false);
   const [prDetailError, setPRDetailError] = useState('');
@@ -208,6 +231,7 @@ export function App() {
         // Set initial view from config
         if (config.defaultView === 'prs') {
           setView('prs');
+          setPrAllRepos(true);
           // PR fetch will trigger via initialSyncDone effect
         }
 
@@ -321,12 +345,8 @@ export function App() {
         // On workspace switch, just show cached data without syncing all repos again.
       }
       setView(config.defaultView === 'prs' ? 'prs' : 'list');
+      setPrAllRepos(config.defaultView === 'prs');
       setSelectedRepo(0);
-      // Load PRs immediately if default view is PRs.
-      // Pass newRepos directly to avoid stale reposRef before React re-render.
-      if (config.defaultView === 'prs' && config.token) {
-        fetchAllPRsRef.current(undefined, newRepos);
-      }
     } catch (err) {
       console.error('switchWorkspace error:', err);
       showStatus('Failed to switch workspace: ' + (err instanceof Error ? err.message : String(err)), true);
@@ -385,6 +405,7 @@ export function App() {
       }
       // Auto-fetch PRs when switching to PR view
       if (newView === 'prs' && repos.length > 0 && cfg?.token) {
+        setPrAllRepos(true);
         setPRError('');
         fetchAllPRsRef.current();
       }
@@ -618,11 +639,7 @@ export function App() {
   useEffect(() => {
     if (!cfg || repoPaths.length === 0 || initialSyncDoneRef.current) return;
     initialSyncDoneRef.current = true;
-    syncAll().then(() => {
-      if (cfg.defaultView === 'prs' && cfg.token) {
-        fetchAllPRsRef.current();
-      }
-    });
+    syncAll();
   }, [cfg, repoPaths, syncAll]);
 
   // ─── Auto-sync ───────────────────────────────────────────────────────────
@@ -664,9 +681,10 @@ export function App() {
         setPRLoading(false);
         return;
       }
-      const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, undefined, filter);
-      result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setPRs(result);
+      const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, undefined, filter, 1, PR_PAGE_SIZE);
+      result.prs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setPRPagination({ [repoPath]: { page: result.page, hasMore: result.hasMore } });
+      setPRs(result.prs);
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       if (raw.includes('401')) {
@@ -692,12 +710,16 @@ export function App() {
     setPRLoading(true);
     setPRError('');
     setPRs([]);
+    setPRPagination({});
     const errors: string[] = [];
     let completed = 0;
     let loadedCount = 0;
 
-    const fetchOne = async (repo: RepoState) => {
+    const fetchOne = async (repo: RepoState, index: number) => {
       try {
+        // Stagger repository requests so a large workspace does not burst
+        // all provider calls at once.
+        if (index > 0) await new Promise<void>((resolve) => setTimeout(resolve, Math.min(index * 100, 1500)));
         const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
         if (!remoteInfo) return;
         let provider = currentCfg.provider;
@@ -706,11 +728,12 @@ export function App() {
           provider = await window.api.detectProvider(remoteUrl);
         }
         if (!provider) return;
-        const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, filter);
-        if (result.length > 0) {
+        const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, filter, 1, PR_PAGE_SIZE);
+        setPRPagination((prev) => ({ ...prev, [repo.path]: { page: result.page, hasMore: result.hasMore } }));
+        if (result.prs.length > 0) {
           loadedCount++;
           setPRs((prev) => {
-            const merged = [...prev, ...result];
+            const merged = [...prev, ...result.prs];
             merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
             return merged;
           });
@@ -734,8 +757,8 @@ export function App() {
       }
     };
 
-    const promises = currentRepos.map((repo) =>
-      fetchOne(repo).finally(() => {
+    const promises = currentRepos.map((repo, index) =>
+      fetchOne(repo, index).finally(() => {
         completed++;
       })
     );
@@ -749,8 +772,45 @@ export function App() {
     setPRLoading(false);
   }, [cfg, repos, prFilter]);
 
+  const loadMorePRs = useCallback(async () => {
+    const currentCfg = cfgRef.current;
+    const currentRepos = reposRef.current;
+    const targets = prAllReposRef.current
+      ? currentRepos.filter((repo) => prPagination[repo.path]?.hasMore)
+      : (currentRepos[selectedRepo] && prPagination[currentRepos[selectedRepo].path]?.hasMore
+        ? [currentRepos[selectedRepo]]
+        : []);
+    if (!currentCfg || targets.length === 0) return;
+    setPRLoading(true);
+    setPRError('');
+    try {
+      await Promise.all(targets.map(async (repo) => {
+        const currentPage = prPagination[repo.path]?.page ?? 0;
+        const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+        if (!remoteInfo) return;
+        let provider = currentCfg.provider;
+        if (!provider) {
+          const remoteUrl = await window.api.getRemoteUrl(repo.path);
+          provider = await window.api.detectProvider(remoteUrl);
+        }
+        const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, prFilter, currentPage + 1, PR_PAGE_SIZE);
+        setPRPagination((prev) => ({ ...prev, [repo.path]: { page: result.page, hasMore: result.hasMore } }));
+        setPRs((prev) => {
+          const existing = new Set(prev.map((pr) => `${pr.repoName}-${pr.number}`));
+          const merged = [...prev, ...result.prs.filter((pr) => !existing.has(`${pr.repoName}-${pr.number}`))];
+          merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          return merged;
+        });
+      }));
+    } catch (err) {
+      setPRError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPRLoading(false);
+    }
+  }, [prFilter, prPagination, selectedRepo]);
+
   // Find a PR by Jira key across every repository, then open the normal review view.
-  const searchPRByJiraKey = useCallback(async (query: string) => {
+  const searchPRByJiraKey = useCallback(async (query: string, onUpdate: (result: PRSearchResult) => void) => {
     const currentCfg = cfgRef.current;
     const currentRepos = reposRef.current;
     const keyMatch = query.toUpperCase().match(/\b[A-Z][A-Z0-9]+-\d+\b/);
@@ -770,67 +830,117 @@ export function App() {
         { url: currentCfg.jiraUrl, email: currentCfg.jiraEmail, apiToken: currentCfg.jiraApiToken },
         issueKey,
       );
-      const repoResults = await Promise.allSettled(currentRepos.map(async (repo) => {
-        const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
-        if (!remoteInfo) return [];
-        let provider = currentCfg.provider;
-        if (!provider) {
-          const remoteUrl = await window.api.getRemoteUrl(repo.path);
-          provider = await window.api.detectProvider(remoteUrl);
-        }
-        return window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, 'all-search');
-      }));
       const queryLower = issueKey.toLowerCase();
+      onUpdate({ jira, prs: [], phase: 'prs', searchedRepos: 0, totalRepos: currentRepos.length });
+      let searchedRepos = 0;
+      let discoveredPRs: PR[] = [];
+      const repoResults: PromiseSettledResult<PR[]>[] = [];
+      for (const [index, repo] of currentRepos.entries()) {
+        onUpdate({
+          jira,
+          prs: discoveredPRs.filter((pr) => `${pr.title} ${pr.sourceBranch} ${pr.repoName}`.toLowerCase().includes(queryLower)),
+          phase: 'prs',
+          searchingRepo: repo.name,
+          searchedRepos,
+          totalRepos: currentRepos.length,
+        });
+        let repoProvider: Provider = currentCfg.provider || 'github';
+        try {
+          const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+          if (!remoteInfo) {
+            repoResults.push({ status: 'fulfilled', value: [] });
+          } else {
+            let provider = currentCfg.provider;
+            if (!provider) {
+              const remoteUrl = await window.api.getRemoteUrl(repo.path);
+              provider = await window.api.detectProvider(remoteUrl);
+            }
+            repoProvider = provider;
+            const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, 'all-search', 1, 100);
+            repoResults.push({ status: 'fulfilled', value: result.prs });
+            discoveredPRs = [...discoveredPRs, ...result.prs];
+          }
+        } catch (error) {
+          repoResults.push({ status: 'rejected', reason: error });
+        }
+        searchedRepos += 1;
+        onUpdate({
+          jira,
+          prs: discoveredPRs.filter((pr) => `${pr.title} ${pr.sourceBranch} ${pr.repoName}`.toLowerCase().includes(queryLower)),
+          phase: 'prs',
+          searchingRepo: repo.name,
+          searchedRepos,
+          totalRepos: currentRepos.length,
+        });
+        if (index < currentRepos.length - 1) await wait(SEARCH_REPO_DELAY_MS[repoProvider]);
+      }
       const allPRs = repoResults
         .filter((result): result is PromiseFulfilledResult<PR[]> => result.status === 'fulfilled')
         .flatMap((result) => result.value)
       // Jira keys are commonly placed in the PR body, so list metadata alone
       // is not enough to find every related PR (especially older merged PRs).
-      const detailedResults = await Promise.allSettled(allPRs.map(async (pr) => {
+      // Jira keys are normally present in the PR title or source branch. Only
+      // spend the expensive detail calls on metadata candidates; this avoids
+      // one detail fan-out for every historical PR in every repository.
+      const detailCandidates = allPRs.filter((pr) => `${pr.title} ${pr.sourceBranch} ${pr.repoName}`.toLowerCase().includes(queryLower));
+      const detailedResults: PromiseSettledResult<{ pr: PR; detail: PRDetail | null }>[] = [];
+      for (const [index, pr] of detailCandidates.entries()) {
         const repo = currentRepos.find((item) => item.name === pr.repoName);
-        if (!repo) return { pr, detail: null };
-        const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
-        if (!remoteInfo) return { pr, detail: null };
-        let provider = currentCfg.provider;
-        if (!provider) {
-          const remoteUrl = await window.api.getRemoteUrl(repo.path);
-          provider = await window.api.detectProvider(remoteUrl);
-        }
+        let detailProvider: Provider = currentCfg.provider || 'github';
         try {
+          if (!repo) {
+            detailedResults.push({ status: 'fulfilled', value: { pr, detail: null } });
+            continue;
+          }
+          const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+          if (!remoteInfo) {
+            detailedResults.push({ status: 'fulfilled', value: { pr, detail: null } });
+            continue;
+          }
+          let provider = currentCfg.provider;
+          if (!provider) {
+            const remoteUrl = await window.api.getRemoteUrl(repo.path);
+            provider = await window.api.detectProvider(remoteUrl);
+          }
+          detailProvider = provider;
           const detail = await window.api.fetchPRDetail(remoteInfo.owner, pr.repoName, pr.number, provider, currentCfg.token);
-          return { pr, detail };
+          detailedResults.push({ status: 'fulfilled', value: { pr, detail } });
         } catch {
           // Keep list metadata usable when a historical detail request is
           // rate-limited; title/branch matching can still find the PR.
-          return { pr, detail: null };
+          detailedResults.push({ status: 'fulfilled', value: { pr, detail: null } });
         }
-      }));
+        if (index < allPRs.length - 1) await wait(SEARCH_DETAIL_DELAY_MS[detailProvider]);
+      }
       const matches = detailedResults
         .filter((result): result is PromiseFulfilledResult<{ pr: PR; detail: PRDetail | null }> => result.status === 'fulfilled')
         .filter(({ pr, detail }) => `${pr.title} ${pr.sourceBranch} ${pr.repoName} ${detail?.description ?? ''}`.toLowerCase().includes(queryLower));
       if (matches.length === 0) {
-        return { jira, prs: [] };
+        onUpdate({ jira, prs: [], phase: 'ready' });
+        return;
       }
       const enrichedPRs = matches.map(({ pr, detail }) => ({ ...pr, mergedAt: detail?.mergedAt, mergedBy: detail?.mergedBy }));
-      return { jira, prs: enrichedPRs };
+      onUpdate({ jira, prs: enrichedPRs, phase: 'ready' });
     } catch (err) {
       throw err instanceof Error ? err : new Error(String(err));
     }
   }, []);
 
-  const openSearchPRReview = useCallback(async (pr: PR, jira: JiraIssue) => {
+  const openSearchPRReview = useCallback(async (selectedPRs: PR[], jira: JiraIssue) => {
+    const pr = selectedPRs[0];
+    if (!pr) return;
     const currentCfg = cfgRef.current;
     const repo = reposRef.current.find((item) => item.name === pr.repoName);
     if (!currentCfg || !repo) throw new Error('Could not locate the repository for this pull request.');
-    const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
-    if (!remoteInfo) throw new Error(`Could not detect the remote repository for ${repo.name}.`);
-    const provider = currentCfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repo.path));
     setReviewContext({ repoPath: repo.path, prNumber: pr.number, returnView: 'prs' });
     setReviewJira(jira);
     setReviewError('');
     setReviewLoading(true);
     setView('review');
     try {
+      const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+      if (!remoteInfo) throw new Error(`Could not detect the remote repository for ${repo.name}.`);
+      const provider = currentCfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repo.path));
       const detail = await window.api.fetchPRDetail(remoteInfo.owner, pr.repoName, pr.number, provider, currentCfg.token);
       setPRs([pr]);
       setSelectedPR(0);
@@ -1368,6 +1478,17 @@ export function App() {
   fetchAllPRsRef.current = fetchAllPRs;
   const prAllReposRef = useRef(prAllRepos);
   prAllReposRef.current = prAllRepos;
+  const prAutoLoadKeyRef = useRef('');
+  useEffect(() => {
+    if (view !== 'prs' || !cfg?.token || repoPaths.length === 0) return;
+    const key = `${cfg.workspace}:${repoPaths.join('|')}`;
+    if (prAutoLoadKeyRef.current === key) return;
+    prAutoLoadKeyRef.current = key;
+    setPrAllRepos(true);
+    // Run only after cfg/repoPaths have been committed, avoiding the startup
+    // race where the fetch function reads the previous workspace refs.
+    fetchAllPRsRef.current('open');
+  }, [cfg?.token, cfg?.workspace, repoPaths, view]);
   const switchWorkspaceRef = useRef(switchWorkspace);
   switchWorkspaceRef.current = switchWorkspace;
   const selectWorkspaceRef = useRef(selectWorkspace);
@@ -2038,6 +2159,10 @@ export function App() {
             error={prError}
             selected={selectedPR}
             filter={prFilter}
+            hasMore={prAllRepos
+              ? Object.values(prPagination).some((page) => page.hasMore)
+              : Boolean(repos[selectedRepo] && prPagination[repos[selectedRepo]!.path]?.hasMore)}
+            onLoadMore={loadMorePRs}
             onSelect={setSelectedPR}
             onBack={() => setView('list')}
             onOpenConfig={() => setShowConfig(true)}
@@ -2198,8 +2323,10 @@ export function App() {
             syncProgress={syncProgress}
             lastSync={lastSync}
             currentView={view === 'prs' ? 'prs' : view === 'k8s' ? 'k8s' : 'list'}
-            onSyncAll={syncAll}
-            onSelectWorkspace={selectWorkspace}
+            onEditWorkspace={() => {
+              const activeWorkspace = workspaces.find((ws) => ws.id === activeWorkspaceId);
+              if (activeWorkspace) setEditWorkspace(activeWorkspace);
+            }}
             onOpenConfig={() => setShowConfig(true)}
             onChangeView={handleChangeView}
             theme={cfg.theme}

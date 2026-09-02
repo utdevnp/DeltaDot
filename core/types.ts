@@ -112,6 +112,13 @@ export interface PR {
   approved: boolean;
 }
 
+export interface PRPage {
+  prs: PR[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 export interface PRCommit {
   hash: string;
   message: string;

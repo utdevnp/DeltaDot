@@ -241,8 +241,8 @@ ipcMain.handle('get-remote-owner-repo', async (_event, repoPath: string) => {
   return getRemoteOwnerRepo(repoPath);
 });
 
-ipcMain.handle('fetch-prs', async (_event, owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string) => {
-  return fetchPRs(owner, repo, provider, token, repoName, state);
+ipcMain.handle('fetch-prs', async (_event, owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number) => {
+  return fetchPRs(owner, repo, provider, token, repoName, state, page, pageSize);
 });
 
 ipcMain.handle('fetch-pr-detail', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string) => {

@@ -1,4 +1,4 @@
-import type { PR, PRDetail, PRCommit, PRFile } from '../../types.js';
+import type { PR, PRDetail, PRCommit, PRFile, PRPage } from '../../types.js';
 import { apiDelay, bearerHeaders } from './shared.js';
 
 export async function fetchBitbucketPRs(
@@ -6,16 +6,19 @@ export async function fetchBitbucketPRs(
   repo: string,
   token: string,
   repoName?: string,
-  state: string = 'OPEN'
-): Promise<PR[]> {
+  state: string = 'OPEN',
+  page = 1,
+  pageSize = 10,
+): Promise<PRPage> {
   const headers = bearerHeaders(token);
   const exhaustive = state.toUpperCase() === 'ALL-SEARCH';
   const apiState = (state.toUpperCase() === 'ALL' || exhaustive) ? 'MERGED,SUPERSEDED,OPEN' : state.toUpperCase() === 'CLOSED' ? 'DECLINED,MERGED,SUPERSEDED' : 'OPEN';
   const data: unknown[] = [];
-  let nextUrl: string | undefined = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests?state=${apiState}&pagelen=100`;
-  let page = 0;
-  while (nextUrl && page < (exhaustive ? 10 : 1)) {
-    if (page > 0) await apiDelay();
+  const requestSize = exhaustive ? 100 : pageSize;
+  let nextUrl: string | undefined = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests?state=${apiState}&pagelen=${requestSize}${exhaustive ? '' : `&page=${page}`}`;
+  let pageIndex = 0;
+  while (nextUrl && pageIndex < (exhaustive ? 10 : 1)) {
+    if (pageIndex > 0) await apiDelay(exhaustive ? 3600 : 120);
     const res = await fetch(nextUrl, { headers });
     if (!res.ok) {
       const errorBody = await res.text();
@@ -24,7 +27,7 @@ export async function fetchBitbucketPRs(
     const json = await res.json() as { values: unknown[]; next?: string };
     if (Array.isArray(json.values)) data.push(...json.values);
     nextUrl = exhaustive ? json.next : undefined;
-    page++;
+    pageIndex++;
   }
   if (!Array.isArray(data)) {
     throw new Error('Unexpected Bitbucket API response: Expected array');
@@ -50,9 +53,9 @@ export async function fetchBitbucketPRs(
     };
   });
 
-  if (exhaustive) return prs;
+  if (exhaustive) return { prs, page: 1, pageSize: requestSize, hasMore: false };
 
-  return Promise.all(prs.map(async (pr) => {
+  const enriched = await Promise.all(prs.map(async (pr) => {
     try {
       const aUrl = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests/${pr.number}/approvals`;
       const aRes = await fetch(aUrl, { headers });
@@ -63,6 +66,7 @@ export async function fetchBitbucketPRs(
     } catch { /* ignore — treat as unapproved */ }
     return pr;
   }));
+  return { prs: enriched, page, pageSize: requestSize, hasMore: Boolean(nextUrl) };
 }
 
 export async function fetchBitbucketPRDetail(

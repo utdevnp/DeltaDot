@@ -1,4 +1,4 @@
-import type { PR, PRDetail, Provider } from '../../types.js';
+import type { PRDetail, PRPage, Provider } from '../../types.js';
 import { fetchGitHubPRs, fetchGitHubPRDetail, createGitHubPRComment } from './github.js';
 import { fetchGitLabPRs, fetchGitLabPRDetail, createGitLabPRComment } from './gitlab.js';
 import { fetchBitbucketPRs, fetchBitbucketPRDetail, createBitbucketPRComment } from './bitbucket.js';
@@ -9,16 +9,18 @@ export async function fetchPRsByProvider(
   provider: Provider,
   token: string,
   repoName?: string,
-  state: string = 'open'
-): Promise<PR[]> {
+  state: string = 'open',
+  page = 1,
+  pageSize = 10,
+): Promise<PRPage> {
   switch (provider) {
     case 'gitlab':
-      return fetchGitLabPRs(owner, repo, token, repoName, state);
+      return fetchGitLabPRs(owner, repo, token, repoName, state, page, pageSize);
     case 'bitbucket':
-      return fetchBitbucketPRs(owner, repo, token, repoName, state);
+      return fetchBitbucketPRs(owner, repo, token, repoName, state, page, pageSize);
     case 'github':
     default:
-      return fetchGitHubPRs(owner, repo, token, repoName, state);
+      return fetchGitHubPRs(owner, repo, token, repoName, state, page, pageSize);
   }
 }
 

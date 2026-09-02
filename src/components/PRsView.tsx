@@ -3,8 +3,12 @@ import type { JiraIssue, PR } from '../../core/types.js';
 import { timeAgo } from '../../core/utils.js';
 
 export interface PRSearchResult {
-  jira: JiraIssue;
+  jira: JiraIssue | null;
   prs: Array<PR & { mergedAt?: string; mergedBy?: string }>;
+  phase: 'jira' | 'prs' | 'ready';
+  searchingRepo?: string;
+  searchedRepos?: number;
+  totalRepos?: number;
 }
 
 interface PRsViewProps {
@@ -18,8 +22,10 @@ interface PRsViewProps {
   onSelectPR: () => void;
   onOpenConfig: () => void;
   onFilterChange: (f: 'open' | 'closed' | 'all') => void;
-  onSearch: (query: string) => Promise<PRSearchResult>;
-  onReviewSearchResult: (pr: PR, jira: JiraIssue) => Promise<void>;
+  onSearch: (query: string, onUpdate: (result: PRSearchResult) => void) => Promise<void>;
+  onReviewSearchResult: (prs: PR[], jira: JiraIssue) => Promise<void>;
+  hasMore: boolean;
+  onLoadMore: () => void;
 }
 
 function FilterTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -49,26 +55,24 @@ function relativeDate(iso?: string): string {
   return value === 'now' ? 'just now' : value.replace(/^(\d+)([smhdw]|mo|y)$/, (_, amount, unit) => `${amount} ${({ s: 'second', m: 'minute', h: 'hour', d: 'day', w: 'week', mo: 'month', y: 'year' } as Record<string, string>)[unit]}${amount === '1' ? '' : 's'} ago`);
 }
 
-export function PRsView({ prs, loading, error, selected, filter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onSearch }: PRsViewProps) {
+export function PRsView({ prs, loading, error, selected, filter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onSearch, onReviewSearchResult, hasMore, onLoadMore }: PRsViewProps) {
   const [searchQuery, setSearchQuery] = React.useState('');
   const [searching, setSearching] = React.useState(false);
   const [searchError, setSearchError] = React.useState('');
   const [searchResult, setSearchResult] = React.useState<PRSearchResult | null>(null);
   const [selectedSearchPR, setSelectedSearchPR] = React.useState(0);
-  const [page, setPage] = React.useState(0);
-  const pageSize = 20;
-  const pageCount = Math.max(1, Math.ceil(prs.length / pageSize));
-  const pageStart = page * pageSize;
-  const visiblePRs = prs.slice(pageStart, pageStart + pageSize);
+  const [selectedSearchPRs, setSelectedSearchPRs] = React.useState<Set<string>>(new Set());
+  const searchRunRef = React.useRef(0);
   const filterLabel = filter === 'open' ? 'Open' : filter === 'closed' ? 'Closed' : 'All';
 
   React.useEffect(() => {
-    setPage(0);
-  }, [filter, prs.length]);
-
-  React.useEffect(() => {
-    setPage(Math.min(Math.floor(selected / pageSize), pageCount - 1));
-  }, [selected, pageCount]);
+    if (!searchResult) return;
+    setSelectedSearchPRs((previous) => {
+      const next = new Set(previous);
+      searchResult.prs.forEach((pr) => next.add(`${pr.repoName}-${pr.number}`));
+      return next;
+    });
+  }, [searchResult?.prs]);
 
   const submitSearch = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -76,8 +80,13 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
     if (!query || searching) return;
     setSearching(true);
     setSearchError('');
+    setSearchResult({ jira: null, prs: [], phase: 'jira' });
+    setSelectedSearchPRs(new Set());
+    const searchRun = ++searchRunRef.current;
     try {
-      setSearchResult(await onSearch(query));
+      await onSearch(query, (result) => {
+        if (searchRun === searchRunRef.current) setSearchResult(result);
+      });
       setSelectedSearchPR(0);
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : String(err));
@@ -88,7 +97,7 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <div className="view-titlebar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pull Request</span>
         <div style={{ flex: 1 }} />
         <FilterTab label="Open" active={filter === 'open'} onClick={() => onFilterChange('open')} />
@@ -111,29 +120,43 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
       </div>
       {searchError && <div style={{ padding: '6px 16px', color: 'var(--accent-red)', fontSize: 12, borderBottom: '1px solid var(--border)' }}>{searchError}</div>}
       {searchResult && (
-        <div role="presentation" onClick={() => setSearchResult(null)} style={{ position: 'absolute', inset: 0, zIndex: 20, background: 'color-mix(in srgb, var(--bg-primary) 68%, transparent)' }}>
+        <div role="presentation" onClick={() => { searchRunRef.current += 1; setSearching(false); setSearchResult(null); }} style={{ position: 'absolute', inset: 0, zIndex: 20, background: 'color-mix(in srgb, var(--bg-primary) 68%, transparent)' }}>
           <aside role="dialog" aria-label="Jira search results" onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 0, right: 0, width: 430, maxWidth: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-pop)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-              <div style={{ color: 'var(--accent-blue)', fontSize: 15, fontWeight: 700 }}>{searchResult.jira.key}</div>
-              <button onClick={() => setSearchResult(null)} aria-label="Close search results" style={{ border: 0, background: 'transparent', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 20 }}>×</button>
+              <div style={{ color: 'var(--accent-blue)', fontSize: 15, fontWeight: 700 }}>{searchResult.jira?.key ?? 'Searching Jira…'}</div>
+              <button onClick={() => { searchRunRef.current += 1; setSearching(false); setSearchResult(null); }} aria-label="Close search results" style={{ border: 0, background: 'transparent', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 20 }}>×</button>
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 18 }}>
-              <div style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600 }}>{searchResult.jira.summary}</div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-                <span className="jira-chip dim">{searchResult.jira.status || 'Unknown status'}</span>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12, alignSelf: 'center' }}>{searchResult.jira.issueType || 'Task'}</span>
+              {searchResult.jira ? <>
+                <div style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600 }}>{searchResult.jira.summary}</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                  <span className="jira-chip dim">{searchResult.jira.status || 'Unknown status'}</span>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: 12, alignSelf: 'center' }}>{searchResult.jira.issueType || 'Task'}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+                  <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Worked by</span>
+                  <strong style={{ color: 'var(--text-primary)', fontSize: 12 }}>{searchResult.jira.assignee || 'unassigned'}</strong>
+                  <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Updated</span>
+                  <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }} title={searchResult.jira.updatedAt ? new Date(searchResult.jira.updatedAt).toLocaleString() : undefined}>{relativeDate(searchResult.jira.updatedAt)}</strong>
+                </div>
+              </> : null}
+              <div className="search-results-heading">
+                <span>Related pull requests</span>
+                <span>{searchResult.prs.length} {searchResult.prs.length === 1 ? 'PR' : 'PRs'}</span>
               </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-                <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Worked by</span>
-                <strong style={{ color: 'var(--text-primary)', fontSize: 12 }}>{searchResult.jira.assignee || 'unassigned'}</strong>
-                <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Updated</span>
-                <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }} title={searchResult.jira.updatedAt ? new Date(searchResult.jira.updatedAt).toLocaleString() : undefined}>{relativeDate(searchResult.jira.updatedAt)}</strong>
-              </div>
-              <div style={{ color: 'var(--text-secondary)', fontSize: 12, fontWeight: 600, margin: '20px 0 7px' }}>Related pull requests</div>
-              {searchResult.prs.length === 0 && <div style={{ padding: '12px 0', color: 'var(--text-dim)', fontSize: 12 }}>No related pull request found for this ticket.</div>}
+              {searchResult.jira && searchResult.phase !== 'ready' && (
+                <div className="search-progress-message">
+                  <span>Searching {searchResult.searchingRepo ? <strong>{searchResult.searchingRepo}</strong> : 'repositories'}<span className="loading-dots" aria-hidden="true" /></span>
+                  {searchResult.totalRepos ? <span className="search-repo-progress">{searchResult.searchedRepos ?? 0}/{searchResult.totalRepos}</span> : null}
+                </div>
+              )}
+              {searchResult.phase === 'ready' && searchResult.prs.length === 0 && <div style={{ padding: '12px 0', color: 'var(--text-dim)', fontSize: 12 }}>No related pull request found for this ticket.</div>}
               {searchResult.prs.map((pr, index) => (
                 <div key={`${pr.repoName}-${pr.number}`} onClick={() => setSelectedSearchPR(index)} style={{ padding: '10px 8px', borderTop: '1px solid var(--border)', borderRadius: 5, background: index === selectedSearchPR ? 'var(--tint-blue)' : 'transparent', cursor: 'pointer' }}>
-                  <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{pr.title}</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                    <input type="checkbox" checked={selectedSearchPRs.has(`${pr.repoName}-${pr.number}`)} onChange={(e) => { e.stopPropagation(); const key = `${pr.repoName}-${pr.number}`; setSelectedSearchPRs((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; }); }} onClick={(e) => e.stopPropagation()} aria-label={`Select PR #${pr.number}`} style={{ marginTop: 2, accentColor: 'var(--accent-blue)' }} />
+                    <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{pr.title}</div>
+                  </div>
                   <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 7 }}>#{pr.number} · {pr.repoName} · {pr.state}</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
                     <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Raised by</span>
@@ -147,8 +170,8 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
                 </div>
               ))}
             </div>
-            {searchResult.prs.length > 0 && <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-              <button onClick={() => { const pr = searchResult.prs[selectedSearchPR]; if (pr) onReviewSearchResult(pr, searchResult.jira).catch((err) => setSearchError(err instanceof Error ? err.message : String(err))); }} style={{ width: '100%', padding: '9px 12px', border: 0, borderRadius: 6, background: 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))', color: '#fff', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>Review selected PR</button>
+            {searchResult.prs.length > 0 && searchResult.jira && <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+              <button disabled={selectedSearchPRs.size === 0} onClick={() => { const selected = searchResult.prs.filter((pr) => selectedSearchPRs.has(`${pr.repoName}-${pr.number}`)); if (selected.length) onReviewSearchResult(selected, searchResult.jira!).catch((err) => setSearchError(err instanceof Error ? err.message : String(err))); }} style={{ width: '100%', padding: '9px 12px', border: 0, borderRadius: 6, background: 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))', color: '#fff', cursor: selectedSearchPRs.size === 0 ? 'default' : 'pointer', opacity: selectedSearchPRs.size === 0 ? 0.55 : 1, fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>Review {selectedSearchPRs.size} selected PR{selectedSearchPRs.size === 1 ? '' : 's'}</button>
             </div>}
           </aside>
         </div>
@@ -180,11 +203,11 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
             <div className="cell" style={{ width: 66, flexShrink: 0, textAlign: 'right', paddingRight: 18 }}>AGE</div>
             <div className="cell" style={{ width: 120, flexShrink: 0 }}>AUTHOR</div>
           </div>
-          {visiblePRs.map((pr, i) => (
+          {prs.map((pr, i) => (
             <div
               key={`${pr.repoName}-${pr.number}`}
-              className={`table-row ${pageStart + i === selected ? 'selected' : ''}`}
-              onClick={() => { onSelect(pageStart + i); onSelectPR(); }}
+              className={`table-row ${i === selected ? 'selected' : ''}`}
+              onClick={() => { onSelect(i); onSelectPR(); }}
             >
               <div className="cell pr-number" style={{ width: 50, flexShrink: 0 }}>#{pr.number}</div>
               <div className="cell pr-title" style={{ flex: 3, minWidth: 0, fontWeight: i === selected ? 600 : 400 }}>
@@ -204,10 +227,10 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
               </div>
             </div>
           ))}
-          {pageCount > 1 && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-            <button disabled={page === 0} onClick={() => setPage((value) => Math.max(0, value - 1))} style={{ padding: '4px 9px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: page === 0 ? 'default' : 'pointer', opacity: page === 0 ? 0.5 : 1 }}>Previous</button>
-            <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>Page {page + 1} of {pageCount}</span>
-            <button disabled={page >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))} style={{ padding: '4px 9px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: page >= pageCount - 1 ? 'default' : 'pointer', opacity: page >= pageCount - 1 ? 0.5 : 1 }}>Next</button>
+          {hasMore && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+            <button disabled={loading} onClick={onLoadMore} style={{ padding: '7px 16px', border: '1px solid var(--border-blue)', borderRadius: 6, background: 'var(--tint-blue)', color: 'var(--accent-blue)', cursor: loading ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600, opacity: loading ? 0.6 : 1 }}>
+              {loading ? 'Loading…' : 'Load more'}
+            </button>
           </div>}
         </div>
       )}

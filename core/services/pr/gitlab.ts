@@ -1,4 +1,4 @@
-import type { PR, PRDetail, PRCommit, PRFile } from '../../types.js';
+import type { PR, PRDetail, PRCommit, PRFile, PRPage } from '../../types.js';
 import { apiDelay, bearerHeaders } from './shared.js';
 
 export async function fetchGitLabPRs(
@@ -6,17 +6,21 @@ export async function fetchGitLabPRs(
   repo: string,
   token: string,
   repoName?: string,
-  state: string = 'opened'
-): Promise<PR[]> {
+  state: string = 'opened',
+  page = 1,
+  pageSize = 10,
+): Promise<PRPage> {
   const headers = bearerHeaders(token);
   const projectId = encodeURIComponent(`${owner}/${repo}`);
   const exhaustive = state === 'all-search';
   const apiState = state === 'closed' ? 'closed' : (state === 'all' || exhaustive) ? 'all' : 'opened';
   const data: unknown[] = [];
   const pageCount = exhaustive ? 10 : 1;
-  for (let page = 1; page <= pageCount; page++) {
-    if (page > 1) await apiDelay();
-    const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests?state=${apiState}&per_page=100&page=${page}`;
+  const requestSize = exhaustive ? 100 : pageSize;
+  for (let apiPage = 1; apiPage <= pageCount; apiPage++) {
+    if (apiPage > 1) await apiDelay(exhaustive ? 1000 : 120);
+    const pageParam = `&page=${exhaustive ? apiPage : page}`;
+    const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests?state=${apiState}&per_page=${requestSize}${pageParam}`;
     const res = await fetch(url, { headers });
     if (!res.ok) {
       const errorBody = await res.text();
@@ -25,7 +29,7 @@ export async function fetchGitLabPRs(
     const pageData = await res.json() as unknown[];
     if (!Array.isArray(pageData)) throw new Error('Unexpected GitLab API response: Expected array');
     data.push(...pageData);
-    if (pageData.length < 100) break;
+    if (pageData.length < requestSize) break;
   }
   if (!Array.isArray(data)) {
     throw new Error('Unexpected GitLab API response: Expected array');
@@ -44,9 +48,9 @@ export async function fetchGitLabPRs(
     approved: false,
   }));
 
-  if (exhaustive) return mrs;
+  if (exhaustive) return { prs: mrs, page: 1, pageSize: requestSize, hasMore: false };
 
-  return Promise.all(mrs.map(async (mr) => {
+  const enriched = await Promise.all(mrs.map(async (mr) => {
     try {
       const aUrl = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests/${mr.number}/approvals`;
       const aRes = await fetch(aUrl, { headers });
@@ -57,6 +61,7 @@ export async function fetchGitLabPRs(
     } catch { /* ignore — treat as unapproved */ }
     return mr;
   }));
+  return { prs: enriched, page, pageSize: requestSize, hasMore: mrs.length === requestSize };
 }
 
 export async function fetchGitLabPRDetail(

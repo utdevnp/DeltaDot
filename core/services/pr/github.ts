@@ -1,4 +1,4 @@
-import type { PR, PRComment, PRDetail, PRCommit, PRFile } from '../../types.js';
+import type { PR, PRComment, PRDetail, PRCommit, PRFile, PRPage } from '../../types.js';
 import { apiDelay, githubHeaders, uniqueStrings } from './shared.js';
 
 export async function fetchGitHubPRs(
@@ -6,16 +6,20 @@ export async function fetchGitHubPRs(
   repo: string,
   token: string,
   repoName?: string,
-  state: string = 'open'
-): Promise<PR[]> {
+  state: string = 'open',
+  page = 1,
+  pageSize = 10,
+): Promise<PRPage> {
   const headers = githubHeaders(token);
   const data: unknown[] = [];
   const exhaustive = state === 'all-search';
   const pageCount = exhaustive ? 10 : 1;
-  for (let page = 1; page <= pageCount; page++) {
-    if (page > 1) await apiDelay();
+  const requestSize = exhaustive ? 100 : pageSize;
+  for (let apiPage = 1; apiPage <= pageCount; apiPage++) {
+    if (apiPage > 1) await apiDelay(exhaustive ? 5000 : 120);
     const apiState = exhaustive ? 'all' : state;
-    const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=${apiState}&per_page=100&page=${page}`;
+    const pageParam = exhaustive ? `&page=${apiPage}` : '';
+    const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=${apiState}&per_page=${requestSize}${exhaustive ? pageParam : `&page=${page}`}`;
     const res = await fetch(url, { headers });
     if (!res.ok) {
       const errorBody = await res.text();
@@ -24,7 +28,7 @@ export async function fetchGitHubPRs(
     const pageData = await res.json() as unknown[];
     if (!Array.isArray(pageData)) throw new Error('Unexpected GitHub API response: Expected array');
     data.push(...pageData);
-    if (pageData.length < 100) break;
+    if (pageData.length < requestSize) break;
   }
   if (!Array.isArray(data)) {
     throw new Error('Unexpected GitHub API response: Expected array');
@@ -45,9 +49,9 @@ export async function fetchGitHubPRs(
 
   // Approval status is not needed for historical Jira searches and checking
   // every old PR can exhaust the provider rate limit across large workspaces.
-  if (exhaustive) return prs;
+  if (exhaustive) return { prs, page: 1, pageSize: requestSize, hasMore: false };
 
-  return Promise.all(prs.map(async (pr) => {
+  const enriched = await Promise.all(prs.map(async (pr) => {
     try {
       const revUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${pr.number}/reviews?per_page=100`;
       const revRes = await fetch(revUrl, { headers });
@@ -58,6 +62,7 @@ export async function fetchGitHubPRs(
     } catch { /* ignore — treat as unapproved */ }
     return pr;
   }));
+  return { prs: enriched, page, pageSize: requestSize, hasMore: prs.length === requestSize };
 }
 
 export async function fetchGitHubPRDetail(

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { homedir } from 'os';
-import type { AppConfig, RepoState, CacheFile, Provider, CommitDetail, PR, PRDetail, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceKind, KubeResourceList } from '../core/types.js';
+import type { AppConfig, RepoState, CacheFile, Provider, CommitDetail, PRDetail, PRPage, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceKind, KubeResourceList } from '../core/types.js';
 
 export interface DeltaDotAPI {
   homeDir: string;
@@ -17,7 +17,7 @@ export interface DeltaDotAPI {
   fetchCommitDetail: (repoPath: string, hash: string) => Promise<CommitDetail>;
   getRemoteUrl: (repoPath: string) => Promise<string>;
   getRemoteOwnerRepo: (repoPath: string) => Promise<{ owner: string; repo: string } | null>;
-  fetchPRs: (owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string) => Promise<PR[]>;
+  fetchPRs: (owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number) => Promise<PRPage>;
   fetchPRDetail: (owner: string, repo: string, prNumber: number, provider: Provider, token: string) => Promise<PRDetail>;
   createPRComment: (owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => Promise<string>;
   getGitUser: (repoPath: string) => Promise<{ name: string; email: string }>;
@@ -77,7 +77,7 @@ const api: DeltaDotAPI = {
   fetchCommitDetail: (repoPath, hash) => ipcRenderer.invoke('fetch-commit-detail', repoPath, hash),
   getRemoteUrl: (repoPath) => ipcRenderer.invoke('get-remote-url', repoPath),
   getRemoteOwnerRepo: (repoPath) => ipcRenderer.invoke('get-remote-owner-repo', repoPath),
-  fetchPRs: (owner, repo, provider, token, repoName, state) => ipcRenderer.invoke('fetch-prs', owner, repo, provider, token, repoName, state),
+  fetchPRs: (owner, repo, provider, token, repoName, state, page, pageSize) => ipcRenderer.invoke('fetch-prs', owner, repo, provider, token, repoName, state, page, pageSize),
   fetchPRDetail: (owner, repo, prNumber, provider, token) => ipcRenderer.invoke('fetch-pr-detail', owner, repo, prNumber, provider, token),
   createPRComment: (owner, repo, prNumber, provider, token, body) => ipcRenderer.invoke('create-pr-comment', owner, repo, prNumber, provider, token, body),
   getGitUser: (repoPath) => ipcRenderer.invoke('get-git-user', repoPath),

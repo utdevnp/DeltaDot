@@ -12,30 +12,26 @@ interface TopBarProps {
   syncProgress: { done: number; total: number };
   lastSync: string;
   currentView: 'list' | 'prs' | 'k8s';
-  onSyncAll: () => void;
-  onSelectWorkspace: () => void;
+  onEditWorkspace: () => void;
   onOpenConfig: () => void;
   onChangeView: (view: 'list' | 'prs' | 'k8s') => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }
 
-function truncatePath(p: string): string {
-  try {
-    const home = (window as any).api?.homeDir || '';
-    if (home && p.startsWith(home)) return '~' + p.slice(home.length);
-  } catch {}
-  return p;
+function folderName(p: string): string {
+  const normalized = p.replace(/[\\/]+$/, '');
+  return normalized.split(/[\\/]/).pop() || normalized;
 }
 
-export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, currentView, onSyncAll, onSelectWorkspace, onOpenConfig, onChangeView, theme, onToggleTheme }: TopBarProps) {
+export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, currentView, onEditWorkspace, onOpenConfig, onChangeView, theme, onToggleTheme }: TopBarProps) {
   const frame = Math.floor(Date.now() / 120) % SPINNER.length;
   const spinner = SPINNER[frame] ?? '?';
 
   return (
     <div className="top-bar">
       <div className="app-title">
-        <span className="dot">■</span>
+        <span className="dot" aria-hidden="true" />
         <span>DeltaDot</span>
       </div>
       <span className="separator">│</span>
@@ -44,9 +40,9 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
         <span
           className="value"
           title={workspacePath}
-          onClick={onSelectWorkspace}
+          onClick={onEditWorkspace}
           style={{ cursor: 'pointer', borderBottom: '1px dashed var(--text-dim)' }}
-        >{truncatePath(workspacePath)}</span>
+        >{folderName(workspacePath)}</span>
       </div>
       <span className="separator">│</span>
       <div className="info-group">
@@ -62,6 +58,7 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
         <select
           value={currentView}
           onChange={(e) => onChangeView(e.target.value as 'list' | 'prs' | 'k8s')}
+          className="icon-action"
           style={{
             padding: '2px 6px',
             background: 'var(--bg-tertiary)',
@@ -87,6 +84,7 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
         ) : null}
         <span
           onClick={onToggleTheme}
+          className="icon-action"
           style={{
             marginLeft: 12,
             padding: '4px 7px',
@@ -122,6 +120,7 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
         </span>
         <span
           onClick={onOpenConfig}
+          className="icon-action"
           style={{
             marginLeft: 4,
             padding: '4px 7px',

@@ -23,7 +23,7 @@ function statusText(repo: RepoState, frame: number): { text: string; color: stri
     case 'syncing':
       return { text: `${spin} syncing`, color: 'var(--accent-cyan)' };
     case 'error':
-      return { text: '⚠ error', color: 'var(--accent-yellow)' };
+      return { text: 'error', color: 'var(--accent-yellow)' };
     case 'behind':
       return { text: repo.missingRelease ? 'no release' : `${repo.diffCommits.length} behind`, color: repo.missingRelease ? 'var(--text-dim)' : 'var(--accent-red)' };
     case 'synced':
@@ -44,7 +44,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
   if (repos.length === 0) {
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <div className="view-titlebar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Repositories</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{repos.length} repos</span>
@@ -60,7 +60,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+      <div className="view-titlebar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Repositories</span>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{repos.length} repos</span>
