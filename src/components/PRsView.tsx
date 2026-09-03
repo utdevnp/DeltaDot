@@ -11,6 +11,13 @@ export interface PRSearchResult {
   totalRepos?: number;
 }
 
+export interface PRSearchViewState {
+  query: string;
+  result: PRSearchResult | null;
+  selectedPR: number;
+  selectedPRs: Set<string>;
+}
+
 interface PRsViewProps {
   prs: PR[];
   loading: boolean;
@@ -26,6 +33,8 @@ interface PRsViewProps {
   onReviewSearchResult: (prs: PR[], jira: JiraIssue) => Promise<void>;
   hasMore: boolean;
   onLoadMore: () => void;
+  searchState?: PRSearchViewState;
+  onSearchStateChange?: (state: PRSearchViewState) => void;
 }
 
 function FilterTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -55,15 +64,19 @@ function relativeDate(iso?: string): string {
   return value === 'now' ? 'just now' : value.replace(/^(\d+)([smhdw]|mo|y)$/, (_, amount, unit) => `${amount} ${({ s: 'second', m: 'minute', h: 'hour', d: 'day', w: 'week', mo: 'month', y: 'year' } as Record<string, string>)[unit]}${amount === '1' ? '' : 's'} ago`);
 }
 
-export function PRsView({ prs, loading, error, selected, filter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onSearch, onReviewSearchResult, hasMore, onLoadMore }: PRsViewProps) {
-  const [searchQuery, setSearchQuery] = React.useState('');
+export function PRsView({ prs, loading, error, selected, filter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onSearch, onReviewSearchResult, hasMore, onLoadMore, searchState, onSearchStateChange }: PRsViewProps) {
+  const [searchQuery, setSearchQuery] = React.useState(() => searchState?.query ?? '');
   const [searching, setSearching] = React.useState(false);
   const [searchError, setSearchError] = React.useState('');
-  const [searchResult, setSearchResult] = React.useState<PRSearchResult | null>(null);
-  const [selectedSearchPR, setSelectedSearchPR] = React.useState(0);
-  const [selectedSearchPRs, setSelectedSearchPRs] = React.useState<Set<string>>(new Set());
+  const [searchResult, setSearchResult] = React.useState<PRSearchResult | null>(() => searchState?.result ?? null);
+  const [selectedSearchPR, setSelectedSearchPR] = React.useState(() => searchState?.selectedPR ?? 0);
+  const [selectedSearchPRs, setSelectedSearchPRs] = React.useState<Set<string>>(() => searchState?.selectedPRs ?? new Set());
   const searchRunRef = React.useRef(0);
   const filterLabel = filter === 'open' ? 'Open' : filter === 'closed' ? 'Closed' : 'All';
+
+  React.useEffect(() => {
+    onSearchStateChange?.({ query: searchQuery, result: searchResult, selectedPR: selectedSearchPR, selectedPRs: selectedSearchPRs });
+  }, [searchQuery, searchResult, selectedSearchPR, selectedSearchPRs, onSearchStateChange]);
 
   React.useEffect(() => {
     if (!searchResult) return;
@@ -120,24 +133,31 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
       </div>
       {searchError && <div style={{ padding: '6px 16px', color: 'var(--accent-red)', fontSize: 12, borderBottom: '1px solid var(--border)' }}>{searchError}</div>}
       {searchResult && (
-        <div role="presentation" onClick={() => { searchRunRef.current += 1; setSearching(false); setSearchResult(null); }} style={{ position: 'absolute', inset: 0, zIndex: 20, background: 'color-mix(in srgb, var(--bg-primary) 68%, transparent)' }}>
-          <aside role="dialog" aria-label="Jira search results" onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 0, right: 0, width: 430, maxWidth: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-pop)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-              <div style={{ color: 'var(--accent-blue)', fontSize: 15, fontWeight: 700 }}>{searchResult.jira?.key ?? 'Searching Jira…'}</div>
-              <button onClick={() => { searchRunRef.current += 1; setSearching(false); setSearchResult(null); }} aria-label="Close search results" style={{ border: 0, background: 'transparent', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 20 }}>×</button>
+        <div className="pr-search-overlay" role="presentation" onClick={() => { searchRunRef.current += 1; setSearching(false); setSearchResult(null); }}>
+          <aside className="pr-search-drawer" role="dialog" aria-label="Jira search results" onClick={(e) => e.stopPropagation()}>
+            <div className="pr-search-drawer-header">
+              <div className="pr-search-key">{searchResult.jira?.key ?? 'Searching Jira…'}</div>
+              <div className="pr-search-header-actions">
+                {searchResult.prs.length > 0 && <button className="pr-search-icon-button" onClick={() => searchResult.prs.forEach((pr) => { if (pr.url) window.api.openUrl(pr.url); })} aria-label="Open all pull requests" title="Open all pull requests">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M8 8h8v8" /><path d="M16 8 7 17" /><path d="M5 5h-1a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" />
+                  </svg>
+                </button>}
+                <button className="pr-search-close" onClick={() => { searchRunRef.current += 1; setSearching(false); setSearchResult(null); }} aria-label="Close search results">×</button>
+              </div>
             </div>
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 18 }}>
+            <div className="pr-search-drawer-body">
               {searchResult.jira ? <>
-                <div style={{ color: 'var(--text-primary)', fontSize: 15, fontWeight: 600 }}>{searchResult.jira.summary}</div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                <div className="pr-search-summary">{searchResult.jira.summary}</div>
+                <div className="pr-search-tags">
                   <span className="jira-chip dim">{searchResult.jira.status || 'Unknown status'}</span>
-                  <span style={{ color: 'var(--text-secondary)', fontSize: 12, alignSelf: 'center' }}>{searchResult.jira.issueType || 'Task'}</span>
+                  <span className="pr-search-issue-type">{searchResult.jira.issueType || 'Task'}</span>
                 </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-                  <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Worked by</span>
-                  <strong style={{ color: 'var(--text-primary)', fontSize: 12 }}>{searchResult.jira.assignee || 'unassigned'}</strong>
-                  <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Updated</span>
-                  <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }} title={searchResult.jira.updatedAt ? new Date(searchResult.jira.updatedAt).toLocaleString() : undefined}>{relativeDate(searchResult.jira.updatedAt)}</strong>
+                <div className="pr-search-meta">
+                  <span>Worked by</span>
+                  <strong>{searchResult.jira.assignee || 'unassigned'}</strong>
+                  <span>Updated</span>
+                  <strong title={searchResult.jira.updatedAt ? new Date(searchResult.jira.updatedAt).toLocaleString() : undefined}>{relativeDate(searchResult.jira.updatedAt)}</strong>
                 </div>
               </> : null}
               <div className="search-results-heading">
@@ -150,28 +170,46 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
                   {searchResult.totalRepos ? <span className="search-repo-progress">{searchResult.searchedRepos ?? 0}/{searchResult.totalRepos}</span> : null}
                 </div>
               )}
-              {searchResult.phase === 'ready' && searchResult.prs.length === 0 && <div style={{ padding: '12px 0', color: 'var(--text-dim)', fontSize: 12 }}>No related pull request found for this ticket.</div>}
+              {searchResult.phase === 'ready' && searchResult.prs.length === 0 && <div className="pr-search-empty">No related pull request found for this ticket.</div>}
               {searchResult.prs.map((pr, index) => (
-                <div key={`${pr.repoName}-${pr.number}`} onClick={() => setSelectedSearchPR(index)} style={{ padding: '10px 8px', borderTop: '1px solid var(--border)', borderRadius: 5, background: index === selectedSearchPR ? 'var(--tint-blue)' : 'transparent', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <div
+                  key={`${pr.repoName}-${pr.number}`}
+                  className={`pr-search-card ${selectedSearchPRs.has(`${pr.repoName}-${pr.number}`) ? 'is-selected' : ''} ${index === selectedSearchPR ? 'is-focused' : ''}`}
+                  tabIndex={0}
+                  onClick={(e) => {
+                    setSelectedSearchPR(index);
+                    e.currentTarget.focus();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key.toLowerCase() === 'o') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (pr.url) window.api.openUrl(pr.url);
+                    }
+                  }}
+                >
+                  <div className="pr-search-card-main">
                     <input type="checkbox" checked={selectedSearchPRs.has(`${pr.repoName}-${pr.number}`)} onChange={(e) => { e.stopPropagation(); const key = `${pr.repoName}-${pr.number}`; setSelectedSearchPRs((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; }); }} onClick={(e) => e.stopPropagation()} aria-label={`Select PR #${pr.number}`} style={{ marginTop: 2, accentColor: 'var(--accent-blue)' }} />
-                    <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{pr.title}</div>
+                    <div className="pr-search-card-title">{pr.title}</div>
                   </div>
-                  <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 7 }}>#{pr.number} · {pr.repoName} · {pr.state}</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-                    <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Raised by</span>
-                    <strong style={{ color: 'var(--text-primary)', fontSize: 12 }}>{pr.author || 'unknown'}</strong>
-                    <span style={{ color: 'var(--text-secondary)', fontSize: 11 }} title={new Date(pr.createdAt).toLocaleString()}>Raised <strong>{relativeDate(pr.createdAt)}</strong></span>
+                  <div className="pr-search-card-repo">
+                    <span>#{pr.number} · {pr.repoName} ·</span>
+                    <span className={`pr-state ${pr.state.toLowerCase()}`}>{pr.state}</span>
+                  </div>
+                  <div className="pr-search-card-meta">
+                    <span>Raised by</span>
+                    <strong>{pr.author || 'unknown'}</strong>
+                    <span title={new Date(pr.createdAt).toLocaleString()}>Raised <strong>{relativeDate(pr.createdAt)}</strong></span>
                     {pr.mergedAt ? <>
-                      <span className="jira-chip green">Merged</span>
-                      <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>by <strong>{pr.mergedBy || 'unknown'}</strong>, <strong title={new Date(pr.mergedAt).toLocaleString()}>{relativeDate(pr.mergedAt)}</strong></span>
-                    </> : <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>Not merged</span>}
+                      <span className="jira-chip purple">Merged</span>
+                      <span>by <strong>{pr.mergedBy || 'unknown'}</strong>, <strong title={new Date(pr.mergedAt).toLocaleString()}>{relativeDate(pr.mergedAt)}</strong></span>
+                    </> : <span>Not merged</span>}
                   </div>
                 </div>
               ))}
             </div>
-            {searchResult.prs.length > 0 && searchResult.jira && <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-              <button disabled={selectedSearchPRs.size === 0} onClick={() => { const selected = searchResult.prs.filter((pr) => selectedSearchPRs.has(`${pr.repoName}-${pr.number}`)); if (selected.length) onReviewSearchResult(selected, searchResult.jira!).catch((err) => setSearchError(err instanceof Error ? err.message : String(err))); }} style={{ width: '100%', padding: '9px 12px', border: 0, borderRadius: 6, background: 'linear-gradient(135deg, var(--btn-blue), var(--btn-blue-dark))', color: '#fff', cursor: selectedSearchPRs.size === 0 ? 'default' : 'pointer', opacity: selectedSearchPRs.size === 0 ? 0.55 : 1, fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>Review {selectedSearchPRs.size} selected PR{selectedSearchPRs.size === 1 ? '' : 's'}</button>
+            {searchResult.prs.length > 0 && searchResult.jira && <div className="pr-search-drawer-footer">
+              <button className="pr-search-review-button" disabled={selectedSearchPRs.size === 0} onClick={() => { const selected = searchResult.prs.filter((pr) => selectedSearchPRs.has(`${pr.repoName}-${pr.number}`)); if (selected.length) onReviewSearchResult(selected, searchResult.jira!).catch((err) => setSearchError(err instanceof Error ? err.message : String(err))); }}>Review {selectedSearchPRs.size} selected PR{selectedSearchPRs.size === 1 ? '' : 's'}</button>
             </div>}
           </aside>
         </div>
