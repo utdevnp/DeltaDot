@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { AppConfig, JiraIssue, PRDetail } from '../../core/types.js';
+import type { AppConfig, JiraIssue, PR, PRDetail } from '../../core/types.js';
 import { JiraTaskPanel } from './review/JiraTaskPanel.js';
 import { PRDetailsPanel } from './review/PRDetailsPanel.js';
 import { AIReviewPanel } from './review/AIReviewPanel.js';
@@ -9,6 +9,7 @@ interface ReviewViewProps {
   repoPath: string;
   prNumber: number;
   prTitle?: string;
+  relatedPRs?: Array<PR & { repoPath?: string }>;
   jiraIssue: JiraIssue | null;
   loading: boolean;
   error: string;
@@ -24,31 +25,51 @@ type ReviewTab = 'jira' | 'pr' | 'ai';
  *   - PR Details → PRDetailsPanel
  *   - AI Review  → AIReviewPanel
  */
-export function ReviewView({ cfg, repoPath, prNumber, prTitle, jiraIssue, loading, error, onBack }: ReviewViewProps) {
+export function ReviewView({ cfg, repoPath, prNumber, prTitle, relatedPRs = [], jiraIssue, loading, error, onBack }: ReviewViewProps) {
   const [tab, setTab] = useState<ReviewTab>('jira');
   const [prDetail, setPrDetail] = useState<PRDetail | null>(null);
+  const [prDetails, setPrDetails] = useState<Record<string, PRDetail | null>>({});
+  const [selectedPRNumber, setSelectedPRNumber] = useState(prNumber);
   const [prDetailLoading, setPrDetailLoading] = useState(false);
   const [prDetailError, setPrDetailError] = useState('');
 
-  // Fetch PR detail lazily the first time the PR Details tab is opened
+  const allRelatedPRs = relatedPRs.length > 0 ? relatedPRs : [{ number: prNumber, title: prTitle ?? '', repoName: '', repoPath, author: '', state: '', sourceBranch: '', targetBranch: '', createdAt: '', url: '', approved: false }];
+  const prKey = (pr: Pick<PR, 'number' | 'repoName'>) => `${pr.repoName || repoPath}-${pr.number}`;
+
+  // Fetch all related PR details lazily the first time the PR Details tab is opened.
   const openPRTab = () => {
     setTab('pr');
-    if (!prDetail && !prDetailLoading && !prDetailError) {
+    if (Object.keys(prDetails).length === 0 && !prDetailLoading && !prDetailError) {
       setPrDetailLoading(true);
       setPrDetailError('');
       (async () => {
         try {
-          const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
-          if (!remoteInfo) throw new Error('Could not detect remote repository');
-          const detail = await window.api.fetchPRDetail(remoteInfo.owner, remoteInfo.repo, prNumber, cfg.provider, cfg.token);
-          setPrDetail(detail);
+          const results = await Promise.all(allRelatedPRs.map(async (pr) => {
+            const remoteInfo = await window.api.getRemoteOwnerRepo(pr.repoPath || repoPath);
+            if (!remoteInfo) return [prKey(pr), null] as const;
+            const detail = await window.api.fetchPRDetail(remoteInfo.owner, pr.repoName || remoteInfo.repo, pr.number, cfg.provider, cfg.token);
+            return [prKey(pr), detail] as const;
+          }));
+          const details = Object.fromEntries(results);
+          setPrDetails(details);
+          const selected = allRelatedPRs.find((pr) => pr.number === selectedPRNumber) ?? allRelatedPRs[0];
+          setPrDetail(selected ? details[prKey(selected)] ?? null : null);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           setPrDetailError(msg);
         }
         setPrDetailLoading(false);
       })();
+    } else {
+      const selected = allRelatedPRs.find((pr) => pr.number === selectedPRNumber) ?? allRelatedPRs[0];
+      if (selected) setPrDetail(prDetails[prKey(selected)] ?? null);
     }
+  };
+
+  const selectRelatedPR = (number: number) => {
+    setSelectedPRNumber(number);
+    const selected = allRelatedPRs.find((pr) => pr.number === number);
+    setPrDetail(selected ? prDetails[prKey(selected)] ?? null : null);
   };
 
   if (loading) {
@@ -61,7 +82,7 @@ export function ReviewView({ cfg, repoPath, prNumber, prTitle, jiraIssue, loadin
 
   return (
     <div className="review-container">
-      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+      <div className="review-view-header" style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
         <span style={{
           fontSize: 12,
           fontWeight: 600,
@@ -89,10 +110,10 @@ export function ReviewView({ cfg, repoPath, prNumber, prTitle, jiraIssue, loadin
 
       <div className="review-tabs">
         <div className={`review-tab ${tab === 'jira' ? 'active' : ''}`} onClick={() => setTab('jira')}>
-          Jira Task
+          Jira
         </div>
         <div className={`review-tab ${tab === 'pr' ? 'active' : ''}`} onClick={openPRTab}>
-          PR Details
+          PRs / Details
         </div>
         <div className={`review-tab ${tab === 'ai' ? 'active' : ''}`} onClick={() => setTab('ai')}>
           AI Review
@@ -106,6 +127,9 @@ export function ReviewView({ cfg, repoPath, prNumber, prTitle, jiraIssue, loadin
         <div style={tab === 'pr' ? undefined : { display: 'none' }}>
           <PRDetailsPanel
             prDetail={prDetail}
+            relatedPRs={allRelatedPRs}
+            selectedPRNumber={selectedPRNumber}
+            onSelectPR={selectRelatedPR}
             loading={prDetailLoading}
             error={prDetailError}
           />
@@ -116,6 +140,7 @@ export function ReviewView({ cfg, repoPath, prNumber, prTitle, jiraIssue, loadin
             repoPath={repoPath}
             prNumber={prNumber}
             jiraIssue={jiraIssue}
+            relatedPRs={allRelatedPRs}
             onPRDetailLoaded={setPrDetail}
           />
         </div>

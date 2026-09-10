@@ -4,10 +4,39 @@ import { SPINNER, truncate } from '../../core/utils.js';
 
 interface RepoListProps {
   repos: RepoState[];
-  selected: number;
-  onSelect: (i: number) => void;
+  selected: string;
+  onSelect: (repo: RepoState) => void;
   isSyncing: boolean;
   syncProgress: { done: number; total: number };
+  base: string;
+  release: string;
+  onSyncAll: () => void;
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
+  onOpenCommits: (repo: RepoState) => void;
+  onOpenPRs: (repo: RepoState) => void;
+  onSyncRepo: (repo: RepoState) => void;
+  onOpenCompare: (repo: RepoState) => void;
+  onOpenRemote: (repo: RepoState) => void;
+  onCopyPath: (repo: RepoState) => void;
+  onCopyRemote: (repo: RepoState) => void;
+  ignoredRepoPaths: string[];
+  onToggleIgnoreRepo: (repo: RepoState) => void;
+}
+
+type MenuIconName = 'commits' | 'pulls' | 'sync' | 'compare' | 'external' | 'copy' | 'ignore';
+
+function MenuIcon({ name }: { name: MenuIconName }) {
+  const paths: Record<MenuIconName, React.ReactNode> = {
+    commits: <><path d="M6 3v18" /><circle cx="6" cy="6" r="2" /><circle cx="6" cy="12" r="2" /><circle cx="6" cy="18" r="2" /><path d="M8 6h7a3 3 0 0 1 3 3v9" /></>,
+    pulls: <><path d="M6 3v14" /><path d="m3 14 3 3 3-3" /><path d="M18 21V7" /><path d="m15 10 3-3 3 3" /></>,
+    sync: <><path d="M20 11a8 8 0 0 0-14.5-4L4 9" /><path d="M4 4v5h5" /><path d="M4 13a8 8 0 0 0 14.5 4L20 15" /><path d="M20 20v-5h-5" /></>,
+    compare: <><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /><path d="M3 15v4a2 2 0 0 0 2 2h4" /><path d="M21 9V5a2 2 0 0 0-2-2h-4" /><path d="m8 8 8 8" /><path d="m16 8-8 8" /></>,
+    external: <><path d="M14 3h7v7" /><path d="m10 14 11-11" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></>,
+    copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4" /></>,
+    ignore: <><path d="M12 3 4 6v5c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6l-8-3Z" /><path d="m9 9 6 6" /><path d="m15 9-6 6" /></>,
+  };
+  return <svg className="repo-context-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 
 function formatAge(repo: RepoState): string {
@@ -33,21 +62,51 @@ function statusText(repo: RepoState, frame: number): { text: string; color: stri
   }
 }
 
-export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }: RepoListProps) {
+export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, base, release, onSyncAll, searchQuery, onSearchQueryChange, onOpenCommits, onOpenPRs, onSyncRepo, onOpenCompare, onOpenRemote, onCopyPath, onCopyRemote, ignoredRepoPaths, onToggleIgnoreRepo }: RepoListProps) {
   const [frame, setFrame] = useState(0);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; repo: RepoState } | null>(null);
+  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
+  const contextMenuRef = React.useRef<HTMLDivElement>(null);
+  const [showIgnored, setShowIgnored] = useState(false);
+  const ignoredSet = new Set(ignoredRepoPaths);
+  const visibleRepos = showIgnored ? repos : repos.filter((repo) => !ignoredSet.has(repo.path));
+  const syncedCount = visibleRepos.filter((repo) => repo.status === 'synced').length;
+  const notInReleaseCount = visibleRepos.filter((repo) => repo.missingRelease).length;
+  const notSyncedCount = visibleRepos.filter((repo) => repo.status === 'behind').length;
 
   useEffect(() => {
     const timer = setInterval(() => setFrame((f) => f + 1), 120);
     return () => clearInterval(timer);
   }, []);
 
-  if (repos.length === 0) {
+  useEffect(() => {
+    if (!contextMenu) return;
+    setContextMenuPosition({ x: contextMenu.x, y: contextMenu.y });
+    const frameId = window.requestAnimationFrame(() => {
+      const menu = contextMenuRef.current;
+      if (!menu) return;
+      const margin = 8;
+      setContextMenuPosition({
+        x: Math.max(margin, Math.min(contextMenu.x, window.innerWidth - menu.offsetWidth - margin)),
+        y: Math.max(margin, Math.min(contextMenu.y, window.innerHeight - menu.offsetHeight - margin)),
+      });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [contextMenu]);
+
+  if (visibleRepos.length === 0) {
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div className="view-titlebar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Repositories</span>
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{repos.length} repos</span>
+        <div className="repo-view-toolbar">
+          <div><strong>Repositories</strong><span className="repo-view-scope">Checking {release} → {base}</span></div>
+          <div className="repo-view-actions">
+            <input className="repo-search-input" value={searchQuery} onChange={(e) => onSearchQueryChange(e.target.value)} placeholder="Search repos..." aria-label="Search repositories" />
+            <span className="repo-status-chip repo-status-chip-synced" title="Sync" data-tooltip="Sync">{syncedCount}</span>
+            <span className="repo-status-chip repo-status-chip-not-synced" title="Not sync" data-tooltip="Not sync">{notSyncedCount}</span>
+            <span className="repo-status-chip repo-status-chip-not-in-release" title="Not in release" data-tooltip="Not in release">{notInReleaseCount}</span>
+            {ignoredRepoPaths.length > 0 && <button type="button" className="repo-show-ignored" onClick={() => setShowIgnored(true)}>Show ignored ({ignoredRepoPaths.length})</button>}
+            <span>{visibleRepos.length} repos</span><button type="button" onClick={onSyncAll}>Sync all</button>
+          </div>
         </div>
         <div className="empty-state">
           <div className="text" style={{ color: 'var(--text-dim)' }}>
@@ -60,10 +119,16 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div className="view-titlebar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Repositories</span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{repos.length} repos</span>
+      <div className="repo-view-toolbar">
+        <div><strong>Repositories</strong><span className="repo-view-scope">Checking {release} → {base}</span></div>
+        <div className="repo-view-actions">
+          <input className="repo-search-input" value={searchQuery} onChange={(e) => onSearchQueryChange(e.target.value)} placeholder="Search repos..." aria-label="Search repositories" />
+          <span className="repo-status-chip repo-status-chip-synced" title="Sync" data-tooltip="Sync">{syncedCount}</span>
+          <span className="repo-status-chip repo-status-chip-not-synced" title="Not sync" data-tooltip="Not sync">{notSyncedCount}</span>
+          <span className="repo-status-chip repo-status-chip-not-in-release" title="Not in release" data-tooltip="Not in release">{notInReleaseCount}</span>
+          {ignoredRepoPaths.length > 0 && <button type="button" className="repo-show-ignored" onClick={() => setShowIgnored((value) => !value)}>{showIgnored ? 'Hide ignored' : `Show ignored (${ignoredRepoPaths.length})`}</button>}
+          <span>{visibleRepos.length} repos</span><button type="button" onClick={onSyncAll} disabled={isSyncing}>{isSyncing ? `Syncing ${syncProgress.done}/${syncProgress.total}` : 'Sync all'}</button>
+        </div>
       </div>
       <div className="table-container">
       <div className="table-header">
@@ -76,8 +141,8 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
         <div className="cell" style={{ flex: 2, minWidth: 120 }}>LAST COMMIT</div>
       </div>
 
-      {repos.map((repo, i) => {
-        const isSelected = i === selected;
+      {visibleRepos.map((repo, i) => {
+        const isSelected = repo.path === selected;
         const dim = repo.missingRelease && repo.status !== 'loading' && repo.status !== 'syncing';
         const st = statusText(repo, frame + i * 2);
         const hasSpinner = repo.status === 'loading' || repo.status === 'stale' || repo.status === 'syncing';
@@ -91,7 +156,12 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
           <div
             key={repo.path}
             className={`table-row ${isSelected ? 'selected' : ''}`}
-            onClick={() => onSelect(i)}
+            onClick={() => onSelect(repo)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onSelect(repo);
+              setContextMenu({ x: event.clientX, y: event.clientY, repo });
+            }}
             style={dim ? { opacity: 0.5 } : undefined}
           >
             {/* # */}
@@ -174,6 +244,25 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress }:
         );
       })}
       </div>
+      {contextMenu && (
+        <>
+          <div className="repo-context-backdrop" onClick={() => setContextMenu(null)} onContextMenu={(event) => { event.preventDefault(); setContextMenu(null); }} />
+          <div ref={contextMenuRef} className="repo-context-menu" style={{ left: contextMenuPosition.x, top: contextMenuPosition.y }} role="menu" aria-label={`Actions for ${contextMenu.repo.name}`}>
+            <div className="repo-context-heading">{contextMenu.repo.name}</div>
+            <button type="button" onClick={() => { setContextMenu(null); onOpenCommits(contextMenu.repo); }}><MenuIcon name="commits" /><span>Open Commits</span><kbd>↵</kbd></button>
+            <button type="button" onClick={() => { setContextMenu(null); onOpenPRs(contextMenu.repo); }}><MenuIcon name="pulls" /><span>View Pull Requests</span><kbd>p</kbd></button>
+            <button type="button" onClick={() => { setContextMenu(null); onSyncRepo(contextMenu.repo); }}><MenuIcon name="sync" /><span>Sync Repository</span><kbd>s</kbd></button>
+            <div className="repo-context-separator" />
+            <button type="button" onClick={() => { setContextMenu(null); onOpenCompare(contextMenu.repo); }}><MenuIcon name="compare" /><span>Open Compare in Browser</span><kbd>o</kbd></button>
+            <button type="button" onClick={() => { setContextMenu(null); onOpenRemote(contextMenu.repo); }}><MenuIcon name="external" /><span>Open Repository URL</span></button>
+            <div className="repo-context-separator" />
+            <button type="button" onClick={() => { setContextMenu(null); onCopyPath(contextMenu.repo); }}><MenuIcon name="copy" /><span>Copy Repository Path</span></button>
+            <button type="button" onClick={() => { setContextMenu(null); onCopyRemote(contextMenu.repo); }}><MenuIcon name="copy" /><span>Copy Remote URL</span></button>
+            <div className="repo-context-separator" />
+            <button type="button" onClick={() => { setContextMenu(null); onToggleIgnoreRepo(contextMenu.repo); }}><MenuIcon name="ignore" /><span>{ignoredSet.has(contextMenu.repo.path) ? 'Unignore Repository' : 'Ignore Repository'}</span></button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

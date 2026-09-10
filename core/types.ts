@@ -40,6 +40,7 @@ export interface AppConfig {
   aiSystemPrompt: string;
   theme: ThemeMode;
   defaultView?: 'list' | 'prs';
+  ignoredRepos?: string[];
 }
 
 export interface CommitEntry {
@@ -404,6 +405,7 @@ export interface KubeResourceItem {
   namespace: string;
   cells: Record<string, string>;
   containerStatuses?: Record<string, string>;
+  containers?: string[];
   loading?: boolean;
 }
 

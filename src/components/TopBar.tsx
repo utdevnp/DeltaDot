@@ -1,7 +1,7 @@
 import React from 'react';
 import { SPINNER } from '../../core/utils.js';
 import { timeAgo } from '../../core/utils.js';
-import type { ThemeMode } from '../../core/types.js';
+import type { ThemeMode, Workspace } from '../../core/types.js';
 
 interface TopBarProps {
   workspacePath: string;
@@ -11,10 +11,12 @@ interface TopBarProps {
   isSyncing: boolean;
   syncProgress: { done: number; total: number };
   lastSync: string;
-  currentView: 'list' | 'prs' | 'k8s';
   onEditWorkspace: () => void;
   onOpenConfig: () => void;
-  onChangeView: (view: 'list' | 'prs' | 'k8s') => void;
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  onSwitchWorkspace: (workspace: Workspace) => void;
+  onAddWorkspace: () => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }
@@ -24,7 +26,7 @@ function folderName(p: string): string {
   return normalized.split(/[\\/]/).pop() || normalized;
 }
 
-export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, currentView, onEditWorkspace, onOpenConfig, onChangeView, theme, onToggleTheme }: TopBarProps) {
+export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, onEditWorkspace, onOpenConfig, workspaces, activeWorkspaceId, onSwitchWorkspace, onAddWorkspace, theme, onToggleTheme }: TopBarProps) {
   const frame = Math.floor(Date.now() / 120) % SPINNER.length;
   const spinner = SPINNER[frame] ?? '?';
 
@@ -35,46 +37,32 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
         <span>DeltaDot</span>
       </div>
       <span className="separator">│</span>
-      <div className="info-group">
-        <span className="label">path</span>
-        <span
-          className="value"
-          title={workspacePath}
-          onClick={onEditWorkspace}
-          style={{ cursor: 'pointer', borderBottom: '1px dashed var(--text-dim)' }}
-        >{folderName(workspacePath)}</span>
+      <div className="workspace-switcher">
+        <span className="workspace-switcher-label">workspace</span>
+        <select
+          aria-label="Active workspace"
+          value={activeWorkspaceId ?? ''}
+          onChange={(e) => {
+            const workspace = workspaces.find((item) => item.id === e.target.value);
+            if (workspace) onSwitchWorkspace(workspace);
+          }}
+        >
+          {workspaces.length === 0 && <option value="">{folderName(workspacePath)}</option>}
+          {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.displayName || workspace.name}</option>)}
+        </select>
+        <button type="button" className="workspace-action-button" onClick={onEditWorkspace} aria-label="Edit workspace" title="Edit workspace">✎</button>
+        <button type="button" className="workspace-add-button" onClick={onAddWorkspace} aria-label="Add workspace" title="Add workspace">+</button>
       </div>
       <span className="separator">│</span>
-      <div className="info-group">
-        <span className="value">{base}</span>
-        <span className="arrow">←</span>
+      <div className="diff-scope" title="Commits on release not in base">
+        <span className="diff-scope-label">DIFF SCOPE</span>
         <span className="value">{release}</span>
+        <span className="arrow">→</span>
+        <span className="value">{base}</span>
       </div>
       <span className="separator">│</span>
       <div className="info-group">
         <span className="value">{repoCount} {repoCount === 1 ? 'repo' : 'repos'}</span>
-      </div>
-      <div className="info-group">
-        <select
-          value={currentView}
-          onChange={(e) => onChangeView(e.target.value as 'list' | 'prs' | 'k8s')}
-          className="icon-action"
-          style={{
-            padding: '2px 6px',
-            background: 'var(--bg-tertiary)',
-            border: '1px solid var(--border)',
-            borderRadius: 3,
-            color: 'var(--text-primary)',
-            fontSize: 12,
-            fontFamily: 'inherit',
-            cursor: 'pointer',
-            outline: 'none',
-          }}
-        >
-          <option value="list">Repos</option>
-          <option value="prs">Pull Requests</option>
-          <option value="k8s">Kubernetes</option>
-        </select>
       </div>
       <div className={`sync-status ${isSyncing ? 'syncing' : lastSync ? 'synced' : ''}`}>
         {isSyncing ? (

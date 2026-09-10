@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeDeploymentSummary, KubeContextTab, KubeWorkloadTab, KubeCompareTab } from '../core/types.js';
+import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind } from '../core/types.js';
 import { getVisibleConfigFields, KUBE_RESOURCE_OPTIONS, WORKSPACE_COLORS } from '../core/types.js';
 import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
@@ -9,13 +9,14 @@ import { CommitsView } from './components/CommitsView';
 import { DetailView } from './components/DetailView';
 import { ConfigDialog } from './components/ConfigDialog';
 import { PRsView } from './components/PRsView';
-import type { PRSearchResult } from './components/PRsView';
+import type { PRSearchResult, PRSearchViewState } from './components/PRsView';
 import { PRDetailView } from './components/PRDetailView';
 import { ReviewView } from './components/ReviewView';
 import { K8sView, KubeConfirmDialog, KubeDescribeDialog } from './components/K8sView';
 import { CommandBar } from './components/CommandBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { WorkspacePanel } from './components/WorkspacePanel';
+import { AppNav } from './components/AppNav';
 import { AddWorkspaceDialog } from './components/AddWorkspaceDialog';
 import { CloneDialog } from './components/CloneDialog';
 
@@ -123,7 +124,9 @@ export function App() {
 
   // Search / Command
   const [inputMode, setInputMode] = useState<'none' | 'search' | 'command'>('none');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [repoSearchQuery, setRepoSearchQuery] = useState('');
+  const [kubeSearchQuery, setKubeSearchQuery] = useState('');
+  const [commandQuery, setCommandQuery] = useState('');
 
   // PR state
   const [prs, setPRs] = useState<PR[]>([]);
@@ -136,11 +139,13 @@ export function App() {
   const [prDetail, setPRDetail] = useState<PRDetail | null>(null);
   const [prDetailLoading, setPRDetailLoading] = useState(false);
   const [prDetailError, setPRDetailError] = useState('');
+  const [prSearchState, setPRSearchState] = useState<PRSearchViewState>({ query: '', result: null, selectedPR: 0, selectedPRs: new Set() });
 
   // Review state
   const [reviewContext, setReviewContext] = useState<{
     repoPath: string; prNumber: number; returnView: 'prs' | 'prdetail';
   }>({ repoPath: '', prNumber: 0, returnView: 'prs' });
+  const [reviewRelatedPRs, setReviewRelatedPRs] = useState<Array<PR & { repoPath?: string }>>([]);
   const [reviewJira, setReviewJira] = useState<JiraIssue | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState('');
@@ -426,7 +431,7 @@ export function App() {
     setShowAddWorkspace(true);
   }, []);
 
-  const handleAddWorkspaceSave = useCallback(async (folder: string, base: string, release: string, syncInterval: number) => {
+  const handleAddWorkspaceSave = useCallback(async (name: string, folder: string, base: string, release: string, syncInterval: number, color: string) => {
     setShowAddWorkspace(false);
     const normalizedPath = folder.replace(/\/+$/, '');
     // Check if workspace with this path already exists
@@ -435,6 +440,9 @@ export function App() {
       // Update existing workspace's branches/interval
       const updated = {
         ...existing,
+        name: name || existing.name,
+        displayName: name || existing.displayName || existing.name,
+        color,
         config: { ...existing.config, base, release, syncInterval },
       };
       await window.api.saveWorkspaceConfig(updated.id, updated.config);
@@ -449,8 +457,6 @@ export function App() {
       await switchWorkspace(updated);
       return;
     }
-    const name = normalizedPath.split('/').pop() ?? normalizedPath;
-    const color = WORKSPACE_COLORS[workspaces.length % WORKSPACE_COLORS.length] ?? '#3b82f6';
     const isDefault = workspaces.length === 0;
     const ws: Workspace = {
       id: normalizedPath,
@@ -483,7 +489,7 @@ export function App() {
   }, [workspaces, cfg, switchWorkspace]);
 
   const handleEditWorkspaceSave = useCallback(async (
-    id: string, name: string, folder: string, base: string, release: string, syncInterval: number
+    id: string, name: string, folder: string, base: string, release: string, syncInterval: number, color: string
   ) => {
     setEditWorkspace(null);
     try {
@@ -499,6 +505,7 @@ export function App() {
         name,
         displayName: name,
         path: folder,
+        color,
         config: { ...ws.config, base, release, syncInterval, workspace: folder },
       };
       // Save config to per-workspace file
@@ -914,6 +921,7 @@ export function App() {
       }
       const matches = detailedResults
         .filter((result): result is PromiseFulfilledResult<{ pr: PR; detail: PRDetail | null }> => result.status === 'fulfilled')
+        .map((result) => result.value)
         .filter(({ pr, detail }) => `${pr.title} ${pr.sourceBranch} ${pr.repoName} ${detail?.description ?? ''}`.toLowerCase().includes(queryLower));
       if (matches.length === 0) {
         onUpdate({ jira, prs: [], phase: 'ready' });
@@ -933,6 +941,7 @@ export function App() {
     const repo = reposRef.current.find((item) => item.name === pr.repoName);
     if (!currentCfg || !repo) throw new Error('Could not locate the repository for this pull request.');
     setReviewContext({ repoPath: repo.path, prNumber: pr.number, returnView: 'prs' });
+    setReviewRelatedPRs(selectedPRs.map((item) => ({ ...item, repoPath: reposRef.current.find((candidate) => candidate.name === item.repoName)?.path })));
     setReviewJira(jira);
     setReviewError('');
     setReviewLoading(true);
@@ -942,7 +951,7 @@ export function App() {
       if (!remoteInfo) throw new Error(`Could not detect the remote repository for ${repo.name}.`);
       const provider = currentCfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repo.path));
       const detail = await window.api.fetchPRDetail(remoteInfo.owner, pr.repoName, pr.number, provider, currentCfg.token);
-      setPRs([pr]);
+      setPRs(selectedPRs);
       setSelectedPR(0);
       setPRDetail(detail);
       setReviewLoading(false);
@@ -1122,6 +1131,20 @@ export function App() {
     });
   }, []);
 
+  const requestKubeRestartAt = useCallback((index: number, all: boolean) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    if (!tab || tab.kind !== 'deployments') return;
+    const row = tab.resources.items[index];
+    if (!all && !row) return;
+    setKubeConfirm({
+      type: all ? 'all-deployments' : 'deployment',
+      context: tab.context,
+      namespace: tab.namespace,
+      name: row?.name,
+      tabId: tab.id,
+    });
+  }, []);
+
   const confirmKubeRestart = useCallback(async () => {
     const action = kubeConfirm;
     setKubeConfirm(null);
@@ -1152,6 +1175,23 @@ export function App() {
     setKubeConfirm({ type: 'delete-resource', context: tab.context, namespace: row.namespace, name: row.name, kind: tab.kind, kindLabel, tabId: tab.id });
   }, []);
 
+  const requestKubeResourceDeleteAt = useCallback((index: number) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    if (!tab || !KUBE_RESOURCE_OPTIONS.some((option) => option.id === tab.kind)) return;
+    const row = tab.resources.items[index];
+    if (!row) return;
+    const kindLabel = KUBE_RESOURCE_OPTIONS.find((option) => option.id === tab.kind)?.label ?? tab.kind;
+    setKubeConfirm({ type: 'delete-resource', context: tab.context, namespace: row.namespace, name: row.name, kind: tab.kind, kindLabel, tabId: tab.id });
+  }, []);
+
+  const copyKubeResourceAt = useCallback((index: number, qualified: boolean) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    const row = tab?.resources.items[index];
+    if (!tab || !row) return;
+    const value = qualified && row.namespace ? `${row.namespace}/${row.name}` : row.name;
+    navigator.clipboard.writeText(value).then(() => showStatus(`${value} copied`)).catch(() => showStatus('Unable to copy resource name', true));
+  }, [showStatus]);
+
   const describeKubeSelection = useCallback(async () => {
     const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
     if (!tab || !KUBE_RESOURCE_OPTIONS.some((option) => option.id === tab.kind)) return;
@@ -1161,11 +1201,35 @@ export function App() {
     const qualifiedName = row.namespace ? `${row.namespace}/${row.name}` : row.name;
     setKubeDescription({ title: `${kindLabel.replace(/s$/, '')} ${qualifiedName}`, json: '', query: '' });
     try {
-      const json = await window.api.k8sDescribeResource(tab.context, row.namespace, tab.kind, row.name);
+      const json = await window.api.k8sDescribeResource(tab.context, row.namespace, tab.kind as KubeResourceKind, row.name);
       setKubeDescription((prev) => prev ? { ...prev, json } : prev);
     } catch (err) {
       setKubeDescription((prev) => prev ? { ...prev, error: err instanceof Error ? err.message : String(err) } : prev);
     }
+  }, []);
+
+  const describeKubeResourceAt = useCallback(async (index: number) => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    if (!tab || !KUBE_RESOURCE_OPTIONS.some((option) => option.id === tab.kind)) return;
+    const row = tab.resources.items[index];
+    if (!row) return;
+    const kindLabel = KUBE_RESOURCE_OPTIONS.find((option) => option.id === tab.kind)?.label ?? tab.kind;
+    const qualifiedName = row.namespace ? `${row.namespace}/${row.name}` : row.name;
+    setKubeDescription({ title: `${kindLabel.replace(/s$/, '')} ${qualifiedName}`, json: '', query: '' });
+    try {
+      const json = await window.api.k8sDescribeResource(tab.context, row.namespace, tab.kind as KubeResourceKind, row.name);
+      setKubeDescription((prev) => prev ? { ...prev, json } : prev);
+    } catch (err) {
+      setKubeDescription((prev) => prev ? { ...prev, error: err instanceof Error ? err.message : String(err) } : prev);
+    }
+  }, []);
+
+  const viewKubeResourceAt = useCallback(async (index: number): Promise<KubeDeploymentDetail | string | null> => {
+    const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
+    const row = tab?.resources.items[index];
+    if (!tab || !row) return null;
+    if (tab.kind === 'deployments') return window.api.k8sDeploymentDetail(tab.context, row.namespace, row.name);
+    return window.api.k8sDescribeResource(tab.context, row.namespace, tab.kind as KubeResourceKind, row.name);
   }, []);
 
   // Open a deployment in its own workload tab (reuses the tab if already open).
@@ -1610,6 +1674,15 @@ export function App() {
       }
 
       switch (view) {
+        case 'config':
+          if (e.key === 'Escape' || e.key === 'b') {
+            e.preventDefault();
+            setView('list');
+          } else if (e.key === 'q') {
+            e.preventDefault();
+            window.api.getAppInfo().then(() => window.close());
+          }
+          break;
         case 'list': {
           switch (e.key) {
             case 'j': case 'ArrowDown':
@@ -1655,7 +1728,7 @@ export function App() {
               if (repos[selectedRepo]) syncOneRef.current(repos[selectedRepo].path);
               break;
             case 'e':
-              setShowConfig(true);
+              setView('config');
               break;
             case 'p': {
               if (repos.length === 0) {
@@ -1697,11 +1770,12 @@ export function App() {
             }
             case '/':
               setInputMode('search');
-              setSearchQuery('');
+              if (view === 'k8s') setKubeSearchQuery('');
+              else setRepoSearchQuery('');
               break;
             case ':':
               setInputMode('command');
-              setSearchQuery('');
+              setCommandQuery('');
               break;
             case 'o': {
               if (repos.length === 0 || !repos[selectedRepo]) {
@@ -1826,6 +1900,7 @@ export function App() {
                   prNumber: pr.number,
                   returnView: 'prs',
                 });
+                setReviewRelatedPRs([{ ...pr, repoPath: repo.path }]);
                 setView('review');
                 const gen = ++reviewGenRef.current;
                 setReviewLoading(true);
@@ -1892,6 +1967,7 @@ export function App() {
                   prNumber: prDetail.number,
                   returnView: 'prdetail',
                 });
+                setReviewRelatedPRs([{ ...prDetail, repoName: prDetail.repoName ?? prRepo?.name ?? repos[selectedRepo]?.name ?? '', approved: Boolean(prDetail.approvedBy?.length), repoPath }]);
                 setView('review');
                 const gen = ++reviewGenRef.current;
                 setReviewLoading(true);
@@ -2048,8 +2124,8 @@ export function App() {
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
-  const filteredRepos = searchQuery
-    ? repos.filter((r) => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  const filteredRepos = repoSearchQuery
+    ? repos.filter((r) => r.name.toLowerCase().includes(repoSearchQuery.toLowerCase()))
     : repos;
 
   // ─── Config Save ─────────────────────────────────────────────────────────
@@ -2065,6 +2141,7 @@ export function App() {
     setCfg(newConfig);
     setWorkspacePath(newConfig.workspace);
     setShowConfig(false);
+    setView('list');
     if (newConfig.workspace) {
       const paths = await window.api.findRepos(newConfig.workspace);
       setRepoPaths(paths);
@@ -2119,14 +2196,89 @@ export function App() {
 
   const renderView = () => {
     switch (view) {
+      case 'config':
+        return (
+          <ConfigDialog
+            config={cfg}
+            fullPage
+            onSave={handleConfigSave}
+            onClose={() => setView('list')}
+            onBrowseWorkspace={browseWorkspace}
+          />
+        );
       case 'list':
         return (
           <RepoList
             repos={filteredRepos}
-            selected={selectedRepo}
-            onSelect={setSelectedRepo}
+            selected={repos[selectedRepo]?.path ?? ''}
+            onSelect={(repo) => setSelectedRepo(repos.findIndex((item) => item.path === repo.path))}
+            searchQuery={repoSearchQuery}
+            onSearchQueryChange={setRepoSearchQuery}
+            ignoredRepoPaths={cfg.ignoredRepos ?? []}
+            onToggleIgnoreRepo={(repo) => {
+              const ignored = new Set(cfg.ignoredRepos ?? []);
+              if (ignored.has(repo.path)) ignored.delete(repo.path);
+              else ignored.add(repo.path);
+              const nextConfig = { ...cfg, ignoredRepos: [...ignored] };
+              setCfg(nextConfig);
+              const { theme: _theme, ...workspaceConfig } = nextConfig;
+              if (activeWorkspaceId) window.api.saveWorkspaceConfig(activeWorkspaceId, workspaceConfig as AppConfig);
+              showStatusRef.current(ignored.has(repo.path) ? `${repo.name} ignored` : `${repo.name} is visible again`);
+            }}
+            onOpenCommits={(repo) => {
+              setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
+              if (repo.status === 'loading' || repo.status === 'syncing') {
+                showStatusRef.current('Repo still loading. Wait for sync to finish.', true);
+                return;
+              }
+              setView('commits');
+              setSelectedCommit(0);
+            }}
+            onOpenPRs={(repo) => {
+              setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
+              if (!cfg?.token || cfg.token.trim() === '') {
+                showStatusRef.current('API token not configured. Press e to open settings.', true);
+                return;
+              }
+              setView('prs');
+              setPRError('');
+              setPrAllRepos(false);
+              fetchPRsForRepoRef.current(repo.path);
+            }}
+            onSyncRepo={(repo) => syncOneRef.current(repo.path)}
+            onOpenCompare={(repo) => {
+              setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
+              window.api.getRemoteUrl(repo.path).then((url) => {
+                if (!url) {
+                  showStatusRef.current('No remote URL found for this repository.', true);
+                  return;
+                }
+                window.api.getCompareUrl(url, cfg.base, cfg.release).then((compareUrl) => {
+                  if (compareUrl) window.api.openUrl(compareUrl);
+                  else showStatusRef.current('Could not generate compare URL.', true);
+                });
+              });
+            }}
+            onOpenRemote={(repo) => {
+              window.api.getRemoteUrl(repo.path).then((url) => {
+                if (url) window.api.openUrl(url);
+                else showStatusRef.current('No remote URL found for this repository.', true);
+              });
+            }}
+            onCopyPath={(repo) => {
+              navigator.clipboard.writeText(repo.path).then(() => showStatusRef.current('Repository path copied'));
+            }}
+            onCopyRemote={(repo) => {
+              window.api.getRemoteUrl(repo.path).then((url) => {
+                if (url) navigator.clipboard.writeText(url).then(() => showStatusRef.current('Remote URL copied'));
+                else showStatusRef.current('No remote URL found for this repository.', true);
+              });
+            }}
             isSyncing={isSyncing}
             syncProgress={syncProgress}
+            base={cfg.base}
+            release={cfg.release}
+            onSyncAll={() => syncAllRef.current()}
           />
         );
       case 'commits': {
@@ -2163,9 +2315,11 @@ export function App() {
               ? Object.values(prPagination).some((page) => page.hasMore)
               : Boolean(repos[selectedRepo] && prPagination[repos[selectedRepo]!.path]?.hasMore)}
             onLoadMore={loadMorePRs}
+            searchState={prSearchState}
+            onSearchStateChange={setPRSearchState}
             onSelect={setSelectedPR}
             onBack={() => setView('list')}
-            onOpenConfig={() => setShowConfig(true)}
+            onOpenConfig={() => setView('config')}
             onFilterChange={(f) => {
               setPRFilter(f);
               setSelectedPR(0);
@@ -2225,6 +2379,7 @@ export function App() {
                 prNumber: prDetail.number,
                 returnView: 'prdetail',
               });
+              setReviewRelatedPRs([{ ...prDetail, repoName: prDetail.repoName ?? prRepo?.name ?? repos[selectedRepo]?.name ?? '', approved: Boolean(prDetail.approvedBy?.length), repoPath: prRepo?.path ?? repos[selectedRepo]?.path ?? '' }]);
               setView('review');
               const gen = ++reviewGenRef.current;
               setReviewLoading(true);
@@ -2257,6 +2412,7 @@ export function App() {
             repoPath={reviewContext.repoPath}
             prNumber={reviewContext.prNumber}
             prTitle={prDetail?.title}
+            relatedPRs={reviewRelatedPRs}
             jiraIssue={reviewJira}
             loading={reviewLoading}
             error={reviewError}
@@ -2272,8 +2428,8 @@ export function App() {
             workloadTabs={kubeWorkloadTabs}
             compareTab={kubeCompareTab}
             error={kubeError}
-            searchQuery={searchQuery}
-            onSearchQueryChange={setSearchQuery}
+            searchQuery={kubeSearchQuery}
+            onSearchQueryChange={setKubeSearchQuery}
             onOpenContextTab={openKubeContextTab}
             onTabNamespaceChange={handleKubeTabNamespaceChange}
             onTabKindChange={handleKubeTabKindChange}
@@ -2282,6 +2438,11 @@ export function App() {
             onTabWatchInterval={handleKubeTabWatchInterval}
             onRefreshTab={refreshKubeTab}
             onSilentRefreshTab={silentRefreshKubeTab}
+            onDescribeResource={describeKubeResourceAt}
+            onDeleteResource={requestKubeResourceDeleteAt}
+            onCopyResource={copyKubeResourceAt}
+            onViewResource={viewKubeResourceAt}
+            onRestartDeployment={requestKubeRestartAt}
             onSelect={selectKubeDeployment}
             onOpenWorkload={openKubeWorkload}
             onOpenPod={openKubeContextPod}
@@ -2322,27 +2483,26 @@ export function App() {
             isSyncing={isSyncing}
             syncProgress={syncProgress}
             lastSync={lastSync}
-            currentView={view === 'prs' ? 'prs' : view === 'k8s' ? 'k8s' : 'list'}
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onSwitchWorkspace={switchWorkspace}
+            onAddWorkspace={selectWorkspace}
             onEditWorkspace={() => {
               const activeWorkspace = workspaces.find((ws) => ws.id === activeWorkspaceId);
               if (activeWorkspace) setEditWorkspace(activeWorkspace);
             }}
-            onOpenConfig={() => setShowConfig(true)}
-            onChangeView={handleChangeView}
+            onOpenConfig={() => setView('config')}
             theme={cfg.theme}
             onToggleTheme={toggleTheme}
           />
 
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-            <WorkspacePanel
-              workspaces={workspaces}
-              activeWorkspaceId={activeWorkspaceId}
-              collapsed={sidebarCollapsed}
-              onSwitch={switchWorkspace}
-              onAdd={selectWorkspace}
-              onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
-              onUpdate={updateWorkspace}
-              onEdit={(ws) => setEditWorkspace(ws)}
+            <AppNav
+              currentView={view}
+              onNavigate={(nextView) => nextView === 'review'
+                ? (reviewContext.prNumber ? setView('review') : setView('prs'))
+                : handleChangeView(nextView)}
+              onOpenSettings={() => setView('config')}
             />
             <div className="main-content">
               {renderView()}
@@ -2385,7 +2545,7 @@ export function App() {
           workspaces={workspaces}
           onSelectWorkspace={selectWorkspace}
           onSwitchWorkspace={switchWorkspace}
-          onOpenConfig={() => setShowConfig(true)}
+          onOpenConfig={() => setView('config')}
           statusMessage={statusMessage}
           statusTone={statusTone}
         />
@@ -2394,10 +2554,10 @@ export function App() {
       {inputMode === 'search' && (
         <CommandBar
           mode="search"
-          value={searchQuery}
-          onChange={setSearchQuery}
+          value={view === 'k8s' ? kubeSearchQuery : repoSearchQuery}
+          onChange={view === 'k8s' ? setKubeSearchQuery : setRepoSearchQuery}
           placeholder={view === 'k8s' ? 'Search pods or deployments...' : 'Search repos...'}
-          onClose={() => { setInputMode('none'); setSearchQuery(''); }}
+          onClose={() => { setInputMode('none'); }}
           onSubmit={() => setInputMode('none')}
         />
       )}
@@ -2405,9 +2565,9 @@ export function App() {
       {inputMode === 'command' && (
         <CommandBar
           mode="command"
-          value={searchQuery}
-          onChange={setSearchQuery}
-          onClose={() => { setInputMode('none'); setSearchQuery(''); }}
+          value={commandQuery}
+          onChange={setCommandQuery}
+          onClose={() => { setInputMode('none'); setCommandQuery(''); }}
           onSubmit={(cmd: string) => {
             setInputMode('none');
             switch (cmd.trim().toLowerCase()) {
@@ -2415,7 +2575,7 @@ export function App() {
                 window.api.getAppInfo().then(() => window.close());
                 break;
               case 'config': case 'settings':
-                setShowConfig(true);
+                setView('config');
                 break;
               case 'sync':
                 syncAllRef.current();

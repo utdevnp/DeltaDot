@@ -110,8 +110,8 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        <div className="view-titlebar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pull Request</span>
+        <div className="pr-list-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pull Requests</span>
         <div style={{ flex: 1 }} />
         <FilterTab label="Open" active={filter === 'open'} onClick={() => onFilterChange('open')} />
         <FilterTab label="Closed" active={filter === 'closed'} onClick={() => onFilterChange('closed')} />

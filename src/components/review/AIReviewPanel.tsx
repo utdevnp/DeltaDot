@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import type { AppConfig, JiraIssue, PRDetail, PRFile } from '../../../core/types.js';
+import type { AppConfig, JiraIssue, PR, PRDetail, PRFile } from '../../../core/types.js';
 import { renderMarkdown } from '../../../core/markdown.js';
 
 interface AIReviewPanelProps {
   cfg: AppConfig;
   repoPath: string;
   prNumber: number;
+  relatedPRs?: Array<PR & { repoPath?: string }>;
   jiraIssue: JiraIssue | null;
   /** Called when a review run fetches PR detail, so the parent can cache it for the PR Details tab. */
   onPRDetailLoaded?: (detail: PRDetail) => void;
@@ -47,7 +48,7 @@ const compactButtonStyle: React.CSSProperties = {
  * Once the review text returns, the left result panel and the right log panel
  * are shown together.
  */
-export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLoaded }: AIReviewPanelProps) {
+export function AIReviewPanel({ cfg, repoPath, prNumber, relatedPRs = [], jiraIssue, onPRDetailLoaded }: AIReviewPanelProps) {
   const [aiReview, setAIReview] = useState<string | null>(null);
   const [aiLoading, setAILoading] = useState(false);
   const [aiError, setAIError] = useState('');
@@ -129,21 +130,32 @@ export function AIReviewPanel({ cfg, repoPath, prNumber, jiraIssue, onPRDetailLo
       setStep(1, 'active'); currentStep = 1;
       const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
       if (!remoteInfo) { throw new Error('Could not detect remote repository'); }
-      const prDetail = await window.api.fetchPRDetail(remoteInfo.owner, remoteInfo.repo, prNumber, cfg.provider, cfg.token);
-      addLog(`Fetched ${prDetail.files?.length ?? 0} changed file(s)`, true);
-      onPRDetailLoaded?.(prDetail);
+      const reviewPRs = relatedPRs.length > 0
+        ? relatedPRs
+        : [{ number: prNumber, repoName: remoteInfo.repo, repoPath, title: '', author: '', state: '', sourceBranch: '', targetBranch: '', createdAt: '', url: '', approved: false }];
+      const details = await Promise.all(reviewPRs.map(async (pr) => {
+        const prRemote = await window.api.getRemoteOwnerRepo(pr.repoPath || repoPath);
+        if (!prRemote) throw new Error(`Could not detect remote repository for PR #${pr.number}`);
+        const detail = await window.api.fetchPRDetail(prRemote.owner, prRemote.repo, pr.number, cfg.provider, cfg.token);
+        return { pr, detail };
+      }));
+      const primaryDetail = details.find(({ pr }) => pr.number === prNumber)?.detail ?? details[0]?.detail;
+      if (!primaryDetail) throw new Error('Could not load pull request details');
+      addLog(`Fetched ${details.length} related PR(s)`, true);
+      addLog(`Fetched ${details.reduce((count, item) => count + (item.detail.files?.length ?? 0), 0)} changed file(s)`, true);
+      onPRDetailLoaded?.(primaryDetail);
       setStep(1, 'done');
 
       // Step 3 — Reviewing
       setStep(2, 'active'); currentStep = 2;
       const files: { path: string; patch?: string; additions: number; deletions: number; status: string }[] =
-        (prDetail.files ?? []).map((f: PRFile) => ({
-          path: f.path,
+        details.flatMap(({ pr, detail }) => (detail.files ?? []).map((f: PRFile) => ({
+          path: `[PR #${pr.number}${pr.repoName ? ` · ${pr.repoName}` : ''}] ${f.path}`,
           patch: f.patch,
           additions: f.additions,
           deletions: f.deletions,
           status: f.status,
-        }));
+        })));
       const jiraDescription = jiraIssue?.description ?? '';
 
       addLog(`Provider: ${cfg.aiProvider}`, true);

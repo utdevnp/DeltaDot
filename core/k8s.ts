@@ -480,7 +480,8 @@ async function addPodMetrics(contextName: string, rawPods: any[], items: KubeRes
         .filter((value: number | null): value is number => value != null)
         .reduce((total: number, value: number) => total + value, 0);
       const limit = podResourceTotal(pod, resource, 'limits');
-      if (usage > 0) item.cells[resource] = `${formatUsage(usage, resource)}${limit != null ? `/${formatUsage(limit, resource)}` : ''}`;
+      item.cells[`${resource}MetricsAvailable`] = 'true';
+      item.cells[resource] = `${formatUsage(usage, resource)}${limit != null ? `/${formatUsage(limit, resource)}` : ''}`;
       if (limit != null && limit > 0 && usage / limit >= 0.8) item.cells[`high${resource === 'cpu' ? 'Cpu' : 'Memory'}`] = 'true';
     }
   });

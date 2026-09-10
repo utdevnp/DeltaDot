@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
-import type { PRDetail } from '../../../core/types.js';
+import type { PR, PRDetail } from '../../../core/types.js';
 import { timeAgo } from '../../../core/utils.js';
 
 interface PRDetailsPanelProps {
   prDetail: PRDetail | null;
+  relatedPRs: Array<PR & { repoPath?: string }>;
+  selectedPRNumber: number;
+  onSelectPR: (number: number) => void;
   loading: boolean;
   error: string;
 }
@@ -48,7 +51,7 @@ function DiffView({ patch }: { patch: string }) {
  * Displays the pull request details: basic info in a 4-column grid and the
  * changed files in collapsible rows with their diffs.
  */
-export function PRDetailsPanel({ prDetail, loading, error }: PRDetailsPanelProps) {
+export function PRDetailsPanel({ prDetail, relatedPRs, selectedPRNumber, onSelectPR, loading, error }: PRDetailsPanelProps) {
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
 
   const toggleFile = (path: string) => {
@@ -133,6 +136,25 @@ export function PRDetailsPanel({ prDetail, loading, error }: PRDetailsPanelProps
 
   return (
     <div className="detail-view" style={{ padding: 0 }}>
+      {relatedPRs.length > 1 && (
+        <div className="detail-section" style={{ marginTop: 0 }}>
+          <h3>Related Pull Requests ({relatedPRs.length})</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {relatedPRs.map((pr) => (
+              <button
+                key={`${pr.repoName}-${pr.number}`}
+                onClick={() => onSelectPR(pr.number)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', textAlign: 'left', border: '1px solid', borderColor: pr.number === selectedPRNumber ? 'var(--accent-blue)' : 'var(--border)', borderRadius: 6, background: pr.number === selectedPRNumber ? 'var(--tint-blue)' : 'var(--bg-secondary)', color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                <span style={{ color: 'var(--accent-blue)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>#{pr.number}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pr.title}</span>
+                <span style={{ color: stateColor(pr.state), fontSize: 11, flexShrink: 0 }}>{pr.state}</span>
+                {pr.repoName && <span style={{ color: 'var(--text-dim)', fontSize: 11, flexShrink: 0 }}>{pr.repoName}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="detail-header">
         <h2>#{prDetail.number} — {prDetail.title}</h2>
       </div>

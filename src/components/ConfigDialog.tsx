@@ -7,9 +7,10 @@ interface ConfigDialogProps {
   onSave: (cfg: AppConfig) => Promise<void>;
   onClose: () => void;
   onBrowseWorkspace?: () => Promise<string | null>;
+  fullPage?: boolean;
 }
 
-type ConfigTab = 'workspace' | 'git' | 'jira' | 'ai';
+type ConfigTab = 'workspace' | 'git' | 'jira' | 'ai' | 'appearance' | 'notifications' | 'shortcuts' | 'advanced';
 
 const SENSITIVE_FIELDS: ConfigField[] = ['token', 'jiraApiToken', 'aiApiKey'];
 
@@ -18,6 +19,10 @@ const TABS: { id: ConfigTab; label: string }[] = [
   { id: 'git', label: 'Git Provider' },
   { id: 'jira', label: 'Task / Jira' },
   { id: 'ai', label: 'AI Review' },
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'shortcuts', label: 'Shortcuts' },
+  { id: 'advanced', label: 'Advanced' },
 ];
 
 const TAB_FIELDS: Record<ConfigTab, ConfigField[]> = {
@@ -25,6 +30,10 @@ const TAB_FIELDS: Record<ConfigTab, ConfigField[]> = {
   git: ['provider', 'token'],
   jira: ['taskProvider', 'jiraUrl', 'jiraEmail', 'jiraApiToken'],
   ai: ['aiProvider', 'aiApiKey', 'aiApiUrl', 'aiModel', 'aiSystemPrompt'],
+  appearance: ['theme'],
+  notifications: [],
+  shortcuts: [],
+  advanced: [],
 };
 
 const TAB_ICONS: Record<ConfigTab, string> = {
@@ -32,6 +41,10 @@ const TAB_ICONS: Record<ConfigTab, string> = {
   git: '',
   jira: '',
   ai: '',
+  appearance: '',
+  notifications: '',
+  shortcuts: '',
+  advanced: '',
 };
 
 const DROPDOWN_OPTIONS: Partial<Record<ConfigField, { value: string; label: string }[]>> = {
@@ -55,9 +68,14 @@ const DROPDOWN_OPTIONS: Partial<Record<ConfigField, { value: string; label: stri
     { value: 'openrouter', label: 'OpenRouter' },
     { value: 'deepseek', label: 'DeepSeek' },
   ],
+  theme: [
+    { value: 'dark', label: 'Dark' },
+    { value: 'light', label: 'Light' },
+    { value: 'system', label: 'System' },
+  ],
 };
 
-export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: ConfigDialogProps) {
+export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, fullPage = false }: ConfigDialogProps) {
   const [form, setForm] = useState<AppConfig>({ ...config });
   const [activeTab, setActiveTab] = useState<ConfigTab>('workspace');
   const [saving, setSaving] = useState(false);
@@ -210,7 +228,7 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
         github: 'GitHub Issues integration is not yet implemented. Select Jira to use the task review feature.',
       };
       return (
-        <div style={{
+        <div className={fullPage ? 'settings-info-card' : undefined} style={{
           padding: '12px 16px',
           borderRadius: 6,
           background: 'var(--tint-yellow)',
@@ -226,7 +244,7 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
     }
     if (activeTab === 'ai' && aiProvider === 'none') {
       return (
-        <div style={{
+        <div className={fullPage ? 'settings-info-card' : undefined} style={{
           padding: '12px 16px',
           borderRadius: 6,
           background: 'var(--bg-tertiary)',
@@ -240,20 +258,36 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
         </div>
       );
     }
+    if (activeTab === 'appearance') {
+      return <div className="settings-info-card">Choose the global appearance for DeltaDot. This preference applies across all workspaces.</div>;
+    }
+    if (activeTab === 'shortcuts') {
+      const shortcuts = [
+        ['j / k', 'Navigate lists'], ['Enter', 'Open selected item'], ['r / R', 'Refresh / review'],
+        ['s / S', 'Sync repo / all'], ['p / P', 'Open PRs'], ['K', 'Kubernetes'],
+        ['w / W', 'Workspace menu'], ['f / /', 'Filter / search'], [':', 'Command palette'],
+        ['Esc / b', 'Back or close'], ['q', 'Quit'],
+      ];
+      return <div className="settings-info-card"><div>Shortcuts are global and remain active even when their hints are hidden from the footer.</div><div className="settings-shortcut-grid">{shortcuts.map(([key, label]) => <div className="settings-shortcut" key={key}><kbd>{key}</kbd><span>{label}</span></div>)}</div></div>;
+    }
+    if (activeTab === 'notifications' || activeTab === 'advanced') {
+      return <div className="settings-info-card">This settings section is reserved for future preferences. Existing behavior remains unchanged.</div>;
+    }
     return null;
   };
 
   return (
-    <div className="command-overlay" onClick={onClose}>
+    <div className={fullPage ? 'settings-page-shell' : 'command-overlay'} onClick={fullPage ? undefined : onClose}>
       <div
-        style={{
+        className={fullPage ? 'settings-page-card' : undefined}
+        style={fullPage ? undefined : {
           width: 560,
           maxWidth: '90vw',
           maxHeight: '85vh',
           background: 'var(--bg-secondary)',
           border: '1px solid var(--border)',
           borderRadius: 10,
-          boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+          boxShadow: 'var(--shadow-pop)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -274,41 +308,26 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace }: Con
             Settings
           </h2>
 
-          {/* Tab bar */}
-          <div style={{ display: 'flex', gap: 0 }}>
+          {!fullPage && <div style={{ display: 'flex', gap: 0 }}>
             {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  padding: '8px 18px',
-                  fontSize: 13,
-                  fontWeight: activeTab === tab.id ? 600 : 400,
-                  color: activeTab === tab.id ? 'var(--accent-blue)' : 'var(--text-secondary)',
-                  background: 'transparent',
-                  border: 'none',
-                  borderBottom: activeTab === tab.id ? '2px solid var(--accent-blue)' : '2px solid transparent',
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  transition: 'color 0.15s, border-color 0.15s',
-                  marginBottom: -1,
-                  outline: 'none',
-                }}
-                onMouseEnter={(e) => {
-                  if (activeTab !== tab.id) e.currentTarget.style.color = 'var(--text-primary)';
-                }}
-                onMouseLeave={(e) => {
-                  if (activeTab !== tab.id) e.currentTarget.style.color = 'var(--text-secondary)';
-                }}
-              >
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ padding: '8px 18px', fontSize: 13, fontWeight: activeTab === tab.id ? 600 : 400, color: activeTab === tab.id ? 'var(--accent-blue)' : 'var(--text-secondary)', background: 'transparent', border: 'none', borderBottom: activeTab === tab.id ? '2px solid var(--accent-blue)' : '2px solid transparent', cursor: 'pointer', fontFamily: 'inherit', transition: 'color 0.15s, border-color 0.15s', marginBottom: -1, outline: 'none' }}>
                 {tab.label}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
 
+        {fullPage && <aside className="settings-page-nav" aria-label="Settings sections">
+          <div className="settings-page-nav-title">Settings</div>
+          {TABS.map((tab) => (
+            <button key={tab.id} type="button" className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)}>
+              {tab.label}
+            </button>
+          ))}
+        </aside>}
+
         {/* Form body */}
-        <div style={{
+        <div className={fullPage ? 'settings-page-form-body' : undefined} style={{
           flex: 1,
           overflowY: 'auto',
           padding: '20px',

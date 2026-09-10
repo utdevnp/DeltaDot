@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import type { Workspace } from '../../core/types.js';
+import { WORKSPACE_COLORS } from '../../core/types.js';
 
 interface AddWorkspaceDialogProps {
   editWorkspace?: Workspace;
-  onSave?: (folder: string, base: string, release: string, syncInterval: number) => void;
-  onEditSave?: (id: string, name: string, folder: string, base: string, release: string, syncInterval: number) => void;
+  onSave?: (name: string, folder: string, base: string, release: string, syncInterval: number, color: string) => void;
+  onEditSave?: (id: string, name: string, folder: string, base: string, release: string, syncInterval: number, color: string) => void;
   onClose: () => void;
   onBrowse: () => Promise<string | null>;
   defaultBase?: string;
@@ -22,6 +23,7 @@ export function AddWorkspaceDialog({
   const [base, setBase] = useState(editWorkspace?.config?.base ?? defaultBase);
   const [release, setRelease] = useState(editWorkspace?.config?.release ?? defaultRelease);
   const [syncInterval, setSyncInterval] = useState(String(editWorkspace?.config?.syncInterval ?? defaultSyncInterval));
+  const [color, setColor] = useState(editWorkspace?.color ?? WORKSPACE_COLORS[0]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,23 +35,25 @@ export function AddWorkspaceDialog({
         base.trim(),
         release.trim(),
         Math.max(1, parseFloat(syncInterval) || 30),
+        color,
       );
     } else if (!isEdit && onSave) {
       if (!folder.trim()) return;
-      onSave(folder.trim(), base.trim(), release.trim(), Math.max(1, parseFloat(syncInterval) || 30));
+      onSave(name.trim() || folder.trim().split(/[\\/]/).pop() || 'Workspace', folder.trim(), base.trim(), release.trim(), Math.max(1, parseFloat(syncInterval) || 30), color);
     }
   };
 
   return (
-    <div className="command-overlay" onClick={onClose}>
+    <div className="command-overlay workspace-dialog-overlay" onClick={onClose}>
       <div
+        className="workspace-dialog"
         style={{
-          width: 480,
+          width: 840,
           maxWidth: '90vw',
           background: 'var(--bg-secondary)',
           border: '1px solid var(--border)',
           borderRadius: 10,
-          boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+          boxShadow: 'var(--shadow-pop)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -57,21 +61,37 @@ export function AddWorkspaceDialog({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{
+        <div className="workspace-dialog-header" style={{
           padding: '16px 20px',
           borderBottom: '1px solid var(--border)',
         }}>
-          <h2 style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
-            {isEdit ? 'Edit Workspace' : 'Add Workspace'}
+          <div className="workspace-dialog-eyebrow">{isEdit ? 'WORKSPACE SETTINGS' : 'NEW WORKSPACE'}</div>
+          <h2 style={{ fontSize: 22, fontWeight: 650, color: 'var(--text-primary)', margin: 0 }}>
+            {isEdit ? 'Edit Workspace' : 'Create Workspace'}
           </h2>
+          <p className="workspace-dialog-description">
+            {isEdit ? 'Update how DeltaDot compares branches and keeps this workspace in sync.' : 'Define how DeltaDot compares branches and keeps your workspace in sync.'}
+          </p>
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <form className="workspace-dialog-form" onSubmit={handleSubmit} style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* Workspace path */}
-          <div className="config-field">
-            <label>Workspace Path</label>
-            <div style={{ display: 'flex', gap: 8 }}>
+          <div className="config-field workspace-form-row">
+            <label>Workspace name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My workspace"
+              style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-primary)', fontSize: 14, fontFamily: 'inherit', outline: 'none' }}
+            />
+            <small>Choose a clear, descriptive name for this workspace.</small>
+          </div>
+
+          <div className="config-field workspace-form-row">
+            <label>Folder path</label>
+            <div className="workspace-path-control" style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
                 value={folder}
@@ -123,38 +143,14 @@ export function AddWorkspaceDialog({
             </div>
           </div>
 
-          {/* Workspace name */}
-          <div className="config-field">
-            <label>Workspace Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={editWorkspace?.name ?? 'My Workspace'}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                color: 'var(--text-primary)',
-                fontSize: 14,
-                fontFamily: 'inherit',
-                outline: 'none',
-              }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-blue)'; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-            />
-          </div>
-
           {/* Base branch */}
-          <div className="config-field">
-            <label>Base Branch</label>
-            <input
+          <div className="config-field workspace-form-row">
+            <label>Base branch <span className="field-info" title="The target branch that changes will be compared against.">ⓘ</span></label>
+            <div className="workspace-select-control"><span className="branch-glyph">⑂</span><input
               type="text"
               value={base}
               onChange={(e) => setBase(e.target.value)}
-              placeholder="main"
+              placeholder="base"
               style={{
                 width: '100%',
                 padding: '8px 12px',
@@ -168,17 +164,18 @@ export function AddWorkspaceDialog({
               }}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-blue)'; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-            />
+            /><span className="select-chevron">⌄</span></div>
+            <small>The target branch that changes will be compared against.</small>
           </div>
 
           {/* Release branch */}
-          <div className="config-field">
-            <label>Release Branch</label>
-            <input
+          <div className="config-field workspace-form-row">
+            <label>Release branch <span className="field-info" title="The branch that will be compared to the base branch.">ⓘ</span></label>
+            <div className="workspace-select-control"><span className="branch-glyph">⑂</span><input
               type="text"
               value={release}
               onChange={(e) => setRelease(e.target.value)}
-              placeholder="R10"
+              placeholder="release"
               style={{
                 width: '100%',
                 padding: '8px 12px',
@@ -192,17 +189,37 @@ export function AddWorkspaceDialog({
               }}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-blue)'; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-            />
+            /><span className="select-chevron">⌄</span></div>
+            <small>The branch that will be compared to the base branch.</small>
           </div>
 
           {/* Sync interval */}
-          <div className="config-field">
-            <label>Sync Interval (min)</label>
-            <input
+          <div className="config-field workspace-form-row">
+            <label>Sync interval <span className="field-info" title="How often DeltaDot fetches and updates this workspace.">ⓘ</span></label>
+            <div className="workspace-select-control"><span className="branch-glyph">◷</span><select
+              value={syncInterval}
+              onChange={(e) => setSyncInterval(e.target.value)}
+            >{[5, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} minutes</option>)}</select><span className="select-chevron">⌄</span></div>
+            <small>How often DeltaDot fetches and updates this workspace.</small>
+          </div>
+
+          <div className="config-field workspace-form-row">
+            <label>Color</label>
+            <div className="workspace-select-control color-picker-control"><span className="color-swatch" style={{ background: color }} /><select value={color} onChange={(e) => setColor(e.target.value)}>
+              {WORKSPACE_COLORS.map((workspaceColor, index) => <option key={workspaceColor} value={workspaceColor}>{['Indigo', 'Emerald', 'Amber', 'Ruby', 'Violet', 'Cyan', 'Orange', 'Pink', 'Purple', 'Teal'][index] ?? 'Custom'}</option>)}
+            </select><span className="select-chevron">⌄</span></div>
+            <small>Color used to identify this workspace across DeltaDot.</small>
+          </div>
+
+          <div className="workspace-diff-preview">
+            <div><span className="diff-scope-label">DIFF SCOPE</span><strong>{release || 'release'}</strong><span className="arrow">→</span><strong>{base || 'base'}</strong><span className="lock-glyph">⌕</span></div>
+            <small>Commits on release not in base.</small>
+          </div>
+          {/* Legacy numeric input intentionally replaced by the compact interval selector. */}
+          <div style={{ display: 'none' }}><input
               type="number"
               value={syncInterval}
               onChange={(e) => setSyncInterval(e.target.value)}
-              placeholder="30"
               min="1"
               style={{
                 width: '100%',
@@ -217,11 +234,10 @@ export function AddWorkspaceDialog({
               }}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-blue)'; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-            />
-          </div>
+            /></div>
 
           {/* Footer actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+          <div className="workspace-dialog-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
             <button
               type="button"
               onClick={onClose}
