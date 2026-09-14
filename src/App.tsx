@@ -164,6 +164,18 @@ export function App() {
   const [kubeError, setKubeError] = useState('');
   const [kubeConfirm, setKubeConfirm] = useState<KubeConfirmAction | null>(null);
   const [kubeDescription, setKubeDescription] = useState<{ title: string; json: string; query: string; error?: string } | null>(null);
+  const kubeResourceRequestRef = useRef<Record<string, number>>({});
+  const kubeResourceInFlightRef = useRef(new Set<string>());
+
+  const beginKubeResourceRequest = useCallback((tabId: string): number => {
+    const next = (kubeResourceRequestRef.current[tabId] ?? 0) + 1;
+    kubeResourceRequestRef.current[tabId] = next;
+    return next;
+  }, []);
+
+  const isCurrentKubeResourceRequest = useCallback((tabId: string, requestId: number): boolean => {
+    return kubeResourceRequestRef.current[tabId] === requestId;
+  }, []);
 
   // Recognize which GitHub account the token belongs to
   useEffect(() => {
@@ -1023,46 +1035,53 @@ export function App() {
   const handleKubeTabNamespaceChange = useCallback(async (tabId: string, ns: string) => {
     const kind = kubeContextTabsRef.current.find((t) => t.id === tabId)?.kind ?? 'deployments';
     const hasRows = (kubeContextTabsRef.current.find((t) => t.id === tabId)?.resources.items.length ?? 0) > 0;
+    const requestId = beginKubeResourceRequest(tabId);
     setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
       ...t,
       namespace: ns,
       loading: !hasRows,
+      refreshing: hasRows,
       error: '',
       resources: hasRows ? { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) } : t.resources,
     } : t));
     try {
       const res = await window.api.k8sResources(tabId, ns, kind);
+      if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false,
+        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false, refreshing: false,
       } : t));
     } catch (err) {
+      if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-        ...t, loading: false, error: err instanceof Error ? err.message : String(err),
+        ...t, loading: false, refreshing: false, error: err instanceof Error ? err.message : String(err),
         resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: false })) },
       } : t));
     }
-  }, []);
+  }, [beginKubeResourceRequest, isCurrentKubeResourceRequest]);
 
   // Switch the resource kind of a context tab (deployments → pods → configmaps …).
   const handleKubeTabKindChange = useCallback(async (tabId: string, kind: string) => {
     const ns = kubeContextTabsRef.current.find((t) => t.id === tabId)?.namespace ?? 'default';
     const hasRows = (kubeContextTabsRef.current.find((t) => t.id === tabId)?.resources.items.length ?? 0) > 0;
+    const requestId = beginKubeResourceRequest(tabId);
     setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-      ...t, kind, loading: !hasRows, error: '',
+      ...t, kind, loading: !hasRows, refreshing: hasRows, error: '',
       resources: hasRows ? { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) } : t.resources,
     } : t));
     try {
       const res = await window.api.k8sResources(tabId, ns, kind);
+      if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false,
+        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false, refreshing: false,
       } : t));
     } catch (err) {
+      if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-        ...t, loading: false, error: err instanceof Error ? err.message : String(err),
+        ...t, loading: false, refreshing: false, error: err instanceof Error ? err.message : String(err),
         resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: false })) },
       } : t));
     }
-  }, []);
+  }, [beginKubeResourceRequest, isCurrentKubeResourceRequest]);
 
   // Pod filters (combinable): owner kinds present in the list.
   const handleKubeTabPodFilterToggle = useCallback((tabId: string, category: string) => {
@@ -1093,24 +1112,34 @@ export function App() {
   const silentRefreshKubeTab = useCallback(async (tabId: string) => {
     const tab = kubeContextTabsRef.current.find((t) => t.id === tabId);
     if (!tab) return;
+    if (kubeResourceInFlightRef.current.has(tabId)) return;
+    kubeResourceInFlightRef.current.add(tabId);
+    const requestId = beginKubeResourceRequest(tabId);
     setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
       ...t,
+      refreshing: true,
       resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) },
     } : t));
     try {
       const res = await window.api.k8sResources(tab.context, tab.namespace, tab.kind);
+      if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
         ...t,
+        refreshing: false,
         resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
         selected: res.items.length > 0 ? Math.min(t.selected, res.items.length - 1) : 0,
       } : t));
     } catch {
+      if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
         ...t,
+        refreshing: false,
         resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: false })) },
       } : t));
+    } finally {
+      kubeResourceInFlightRef.current.delete(tabId);
     }
-  }, []);
+  }, [beginKubeResourceRequest, isCurrentKubeResourceRequest]);
 
   // Select a resource row inside the active context tab.
   const selectKubeDeployment = useCallback((i: number) => {
@@ -1335,13 +1364,14 @@ export function App() {
   const refreshKubeLogs = useCallback(async () => {
     const tab = kubeWorkloadTabsRef.current.find((t) => t.id === kubeActiveTabRef.current && t.mode === 'pod-logs');
     if (!tab || !tab.container) return;
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, logsRefreshing: true } : t));
     try {
       const logs = await window.api.k8sPodLogs(tab.context, tab.namespace, tab.name, tab.container);
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id
-        ? { ...t, logs: mergeKubeLogSnapshot(t.logs ?? '', logs), error: '' }
+        ? { ...t, logs: mergeKubeLogSnapshot(t.logs ?? '', logs), error: '', logsRefreshing: false }
         : t));
     } catch (err) {
-      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, error: err instanceof Error ? err.message : String(err) } : t));
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, logsRefreshing: false, error: err instanceof Error ? err.message : String(err) } : t));
     }
   }, []);
 

@@ -348,6 +348,7 @@ export interface KubeWorkloadTab {
   loading: boolean;
   podsLoading?: boolean;
   logsLoading?: boolean;
+  logsRefreshing?: boolean;
   error?: string;
 }
 
@@ -387,6 +388,7 @@ export interface KubeContextTab {
   watchInterval: number; // seconds between polls (default 1)
   selected: number;
   loading: boolean;
+  refreshing?: boolean;
   error: string;
   podDrilldown?: KubePodDrilldown;
 }

@@ -387,9 +387,58 @@ export async function describeKubeResource(
       kind: spec.kind,
       metadata: { name, ...(spec.namespaced === false ? {} : { namespace }) },
     });
+    if (kind === 'pods') {
+      (resource as any).__deltadot = { ingresses: await findPodIngresses(contextName, namespace, resource as any) };
+    }
     return JSON.stringify(resource, null, 2);
   } catch (err) {
     throw new Error(describeError(err, contextName));
+  }
+}
+
+/** Find ingress routes that can reach a pod through a matching Service selector. */
+async function findPodIngresses(contextName: string, namespace: string, pod: any): Promise<Array<Record<string, string>>> {
+  try {
+    const kc = makeConfig(contextName);
+    const core = kc.makeApiClient(k8s.CoreV1Api);
+    const networking = kc.makeApiClient(k8s.NetworkingV1Api);
+    const [serviceResult, ingressResult] = await Promise.all([
+      core.listNamespacedService({ namespace }),
+      networking.listNamespacedIngress({ namespace }),
+    ]);
+    const labels = pod?.metadata?.labels ?? {};
+    const services = (serviceResult.items ?? []).filter((service: any) => {
+      const selector = service?.spec?.selector ?? {};
+      const entries = Object.entries(selector);
+      return entries.length > 0 && entries.every(([key, value]) => labels[key] === value);
+    });
+    const serviceNames = new Set(services.map((service: any) => service.metadata?.name).filter(Boolean));
+    if (!serviceNames.size) return [];
+    const result: Array<Record<string, string>> = [];
+    for (const ingress of ingressResult.items ?? []) {
+      const address = (ingress.status?.loadBalancer?.ingress ?? [])
+        .map((entry: any) => entry?.ip ?? entry?.hostname ?? '')
+        .filter(Boolean)
+        .join(', ');
+      for (const rule of ingress.spec?.rules ?? []) {
+        for (const path of rule.http?.paths ?? []) {
+          const backend = path.backend?.service;
+          if (!backend?.name || !serviceNames.has(backend.name)) continue;
+          result.push({
+            ingress: ingress.metadata?.name ?? '',
+            host: rule.host ?? '*',
+            path: path.path ?? '/',
+            service: backend.name,
+            port: String(backend.port?.number ?? backend.port?.name ?? '—'),
+            address: address || '—',
+          });
+        }
+      }
+    }
+    return result;
+  } catch {
+    // Ingress/service permissions are optional; the Pod inspector still works.
+    return [];
   }
 }
 
@@ -457,16 +506,17 @@ function podResourceTotal(pod: any, resource: 'cpu' | 'memory', field: 'requests
 }
 
 async function loadPodMetrics(contextName: string, namespace?: string): Promise<Map<string, any>> {
-  const api = makeConfig(contextName).makeApiClient(k8s.KubernetesObjectApi);
-  for (const version of ['v1', 'v1beta1']) {
-    try {
-      const result: any = await api.list(`metrics.k8s.io/${version}`, 'Pod', namespace);
-      return new Map((result?.items ?? []).map((pod: any) => [`${pod?.metadata?.namespace ?? ''}/${pod?.metadata?.name ?? ''}`, pod]));
-    } catch {
-      // Older clusters expose only metrics.k8s.io/v1beta1.
-    }
+  try {
+    // Use the client's dedicated metrics wrapper rather than the generic
+    // object API. It targets metrics.k8s.io/v1beta1 directly and handles the
+    // metrics-server response shape consistently across cluster versions.
+    const result = await new k8s.Metrics(makeConfig(contextName)).getPodMetrics(namespace);
+    return new Map((result?.items ?? []).map((pod: any) => [`${pod?.metadata?.namespace ?? ''}/${pod?.metadata?.name ?? ''}`, pod]));
+  } catch {
+    // Live usage is optional: clusters without metrics-server still show the
+    // configured requests/limits from the Pod spec.
+    return new Map();
   }
-  return new Map();
 }
 
 async function addPodMetrics(contextName: string, rawPods: any[], items: KubeResourceItem[], namespace?: string): Promise<void> {

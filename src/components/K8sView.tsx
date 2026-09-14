@@ -7,6 +7,7 @@ import { KUBE_RESOURCE_OPTIONS } from '../../core/types.js';
 import { timeAgo } from '../../core/utils.js';
 import { SPINNER } from '../../core/utils.js';
 import { compareContextImages, extractImageVersion, type KubeImageCompareRow } from '../../core/k8s-compare.js';
+import { K8sInspectorErrorBoundary, K8sResourceInspector, type K8sInspectorEntry } from './k8s/K8sResourceInspector.js';
 
 interface K8sViewProps {
   contexts: KubeContext[];
@@ -503,18 +504,13 @@ function ResourceCell({ column, value, warning }: { column: KubeResourceColumn; 
   return <span>{value || '—'}</span>;
 }
 
-function PodUsageCell({ value, metricsAvailable }: { value: string; metricsAvailable: boolean }) {
+function PodResourceCell({ value, metricsAvailable }: { value: string; metricsAvailable: boolean }) {
   const used = usageResource(value);
   const allocated = allocatedFromUsage(value);
-  const usedAmount = resourceAmount(used);
-  const allocatedAmount = resourceAmount(allocated);
-  const percent = allocated && Number.isFinite(usedAmount) && Number.isFinite(allocatedAmount)
-    ? Math.min(100, Math.max(0, usedAmount / Math.max(allocatedAmount, 0.0001) * 100))
-    : 0;
   const title = metricsAvailable
     ? (allocated ? `${used || '0'} used / ${allocated} allocated` : `${used || '0'} used / allocation unavailable`)
     : 'Live metrics unavailable · showing configured requests/limits';
-  return <span className="k8s-table-usage" title={title}><span className="k8s-table-usage-track"><span style={{ width: `${metricsAvailable ? percent : 0}%` }} /></span><span>{allocated ? `${used}/${allocated}` : used || '—'}</span></span>;
+  return <span title={title}>{value || '—'}</span>;
 }
 
 function podRowStyle(status: string, owner: string, selected: boolean): React.CSSProperties {
@@ -557,11 +553,17 @@ function InspectorStatus({ value }: { value: string }) {
 }
 
 function resourceAmount(value: string): number {
-  const match = value.trim().match(/^([\d.]+)\s*(m|Ki|Mi|Gi|Ti)?$/i);
+  const match = value.trim().match(/^([\d.]+)\s*(n|u|m|B|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$/i);
   if (!match) return Number.NaN;
   const amount = Number(match[1]);
   const unit = match[2]?.toLowerCase();
+  if (unit === 'n') return amount / 1e9;
+  if (unit === 'u') return amount / 1e6;
   if (unit === 'm') return amount / 1000;
+  if (unit === 'b') return amount;
+  if (unit === 'k') return amount * 1000;
+  if (unit === 'p') return amount * 1000 ** 5;
+  if (unit === 'e') return amount * 1000 ** 6;
   if (unit === 'ki') return amount * 1024;
   if (unit === 'mi') return amount * 1024 ** 2;
   if (unit === 'gi') return amount * 1024 ** 3;
@@ -599,7 +601,8 @@ function usageResource(value: string): string {
 }
 
 function allocatedFromUsage(value: string): string {
-  return value.split('/')[1]?.trim() ?? '';
+  const allocated = value.split('/')[1]?.trim() ?? '';
+  return allocated === '—' || allocated === '-' ? '' : allocated;
 }
 
 function InspectorMetric({ label, value, limit, free, available = true }: { label: string; value: string; limit?: string; free?: string; available?: boolean }) {
@@ -608,27 +611,45 @@ function InspectorMetric({ label, value, limit, free, available = true }: { labe
   const usedAmount = resourceAmount(usedValue);
   const limitAmount = effectiveLimit ? resourceAmount(effectiveLimit) : Number.NaN;
   const percent = effectiveLimit && Number.isFinite(usedAmount) && Number.isFinite(limitAmount) ? Math.min(100, Math.max(0, usedAmount / Math.max(limitAmount, 0.0001) * 100)) : 0;
-  const visualPercent = available ? (percent || (!effectiveLimit && Number.isFinite(usedAmount) && usedAmount > 0 ? 18 : 0)) : 0;
+  // Keep the visual comparison visible even when the cluster has no live
+  // metrics-server: in that case the value is the configured resource data.
+  const visualPercent = percent || (!effectiveLimit && Number.isFinite(usedAmount) && usedAmount > 0 ? 18 : 0);
   const title = available
     ? (effectiveLimit ? `${usedValue || '0'} used · ${free || '—'} free · ${effectiveLimit} allocated` : `${usedValue || '0'} used · allocation unavailable`)
     : 'Live metrics unavailable · showing configured requests/limits';
-  return <div className="k8s-inspector-metric"><div><span>{label}</span><strong>{available ? (effectiveLimit ? `${effectiveLimit} allocated` : 'allocation unavailable') : 'metrics unavailable'}</strong></div><div className="k8s-inspector-metric-track" title={title}><span style={{ width: `${visualPercent}%` }} /></div></div>;
+  return <div className="k8s-inspector-metric"><div><span>{label}</span><strong>{`${usedValue || '—'} / ${effectiveLimit || '—'}`}</strong></div><div className="k8s-inspector-metric-track" title={title}><span style={{ width: `${visualPercent}%`, background: 'var(--accent-green)' }} /></div></div>;
 }
 
-function InspectorCard({ icon, title, summary, children }: { icon: React.ReactNode; title: string; summary: string; children: React.ReactNode }) {
+function inspectorNodeText(node: React.ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(inspectorNodeText).join(' ');
+  if (React.isValidElement(node)) {
+    const props = node.props as Record<string, any>;
+    return [props.label, props.value, props.title, inspectorNodeText(props.children)].filter(Boolean).join(' ');
+  }
+  return '';
+}
+
+function InspectorCard({ icon, title, summary, children, searchQuery = '' }: { icon: React.ReactNode; title: string; summary: string; children: React.ReactNode; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false);
   const values = React.Children.toArray(children);
-  const hasMore = values.length > 4;
-  return <div className={`k8s-inspector-card${hasMore ? ' has-more' : ''}${expanded ? ' is-active' : ''}`} onClick={() => setExpanded((open) => !open)} title="Click to toggle card details"><div className="k8s-inspector-card-title"><span className="k8s-inspector-card-icon">{icon}</span><span>{title}</span></div><div className="k8s-inspector-card-summary">{summary}</div><div className="k8s-inspector-card-detail" onClick={(e) => e.stopPropagation()}>{values.slice(0, expanded ? values.length : 4)}{hasMore && !expanded && <div className="k8s-card-more">+{values.length - 4} more</div>}</div></div>;
+  const query = searchQuery.trim().toLowerCase();
+  const matchingValues = query ? values.filter((value) => inspectorNodeText(value).toLowerCase().includes(query)) : values;
+  if (query && !`${title} ${summary}`.toLowerCase().includes(query) && matchingValues.length === 0) return null;
+  const visibleValues = query && !`${title} ${summary}`.toLowerCase().includes(query) ? matchingValues : values;
+  const hasMore = visibleValues.length > 4;
+  return <div className={`k8s-inspector-card${hasMore ? ' has-more' : ''}${expanded ? ' is-active' : ''}`} onClick={() => setExpanded((open) => !open)} title="Click to toggle card details"><div className="k8s-inspector-card-title"><span className="k8s-inspector-card-icon">{icon}</span><span>{title}</span></div><div className="k8s-inspector-card-summary">{summary}</div><div className="k8s-inspector-card-detail" onClick={(e) => e.stopPropagation()}>{visibleValues.slice(0, expanded ? visibleValues.length : 4)}{hasMore && !expanded && <div className="k8s-card-more">+{visibleValues.length - 4} more</div>}</div></div>;
 }
 
-function ResourceInspector({ item, kind, detail, description, loading, error }: {
+function ResourceInspector({ item, kind, detail, description, loading, error, searchQuery }: {
   item: KubeResourceItem;
   kind: string;
   detail: KubeDeploymentDetail | null;
   description: string;
   loading: boolean;
   error: string;
+  searchQuery: string;
 }) {
   const containers = detail?.containers ?? [];
   const parsedDescription = useMemo(() => {
@@ -636,10 +657,11 @@ function ResourceInspector({ item, kind, detail, description, loading, error }: 
     try { return JSON.parse(description) as any; } catch { return null; }
   }, [description]);
   const rawContainers = parsedDescription?.spec?.containers ?? parsedDescription?.spec?.template?.spec?.containers ?? [];
-  const card = (icon: string, title: string, summary: string, children: React.ReactNode) => <InspectorCard key={title} icon={icon} title={title} summary={summary}>{children}</InspectorCard>;
+  const card = (icon: string, title: string, summary: string, children: React.ReactNode) => <InspectorCard key={title} icon={icon} title={title} summary={summary} searchQuery={searchQuery}>{children}</InspectorCard>;
   const genericCards = (() => {
     const raw = parsedDescription;
     const podSpec = raw?.spec?.template?.spec ?? raw?.spec ?? {};
+    const podIngresses = Array.isArray(raw?.__deltadot?.ingresses) ? raw.__deltadot.ingresses : [];
     const envCount = rawContainers.reduce((total: number, c: any) => total + (c?.env?.length ?? 0), 0);
     const resources = rawContainers.flatMap((c: any) => [<InspectorValue key={`${c.name}-requests`} label={`${c.name} · Requests`} value={Object.entries(c?.resources?.requests ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')} copy />, <InspectorValue key={`${c.name}-limits`} label={`${c.name} · Limits`} value={Object.entries(c?.resources?.limits ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')} copy />]);
     const common = [
@@ -655,20 +677,37 @@ function ResourceInspector({ item, kind, detail, description, loading, error }: 
       card('✓', 'Conditions', `${raw?.status?.conditions?.length ?? 0} conditions`, (raw?.status?.conditions ?? []).map((condition: any) => <InspectorValue key={condition.type} label={condition.type} value={`${condition.status}${condition.reason ? ` · ${condition.reason}` : ''}`} />)),
       card('⌑', 'Metadata', `${Object.keys(raw?.metadata?.labels ?? {}).length} labels`, <><InspectorValue label="Labels" value={Object.entries(raw?.metadata?.labels ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')} copy /><InspectorValue label="Annotations" value={Object.entries(raw?.metadata?.annotations ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')} copy /></>),
     ];
+    if (kind === 'pods') {
+      common.push(card('↗', 'Ingress', `${podIngresses.length} route${podIngresses.length === 1 ? '' : 's'}`, podIngresses.length
+        ? podIngresses.map((route: any, index: number) => <InspectorValue key={`${route.ingress}-${index}`} label={`${route.host}${route.path}`} value={`${route.service}:${route.port} · ${route.address}`} copy />)
+        : <InspectorValue label="Routes" value="No Ingress route found" />));
+    }
     if (kind === 'services') return [common[0], card('⇄', 'Service', item.cells.type ?? 'ClusterIP', <><InspectorValue label="Cluster IP" value={item.cells.clusterIp ?? ''} copy /><InspectorValue label="External IP" value={item.cells.externalIp ?? ''} copy /><InspectorValue label="Selector" value={Object.entries(raw?.spec?.selector ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')} copy /></>), common[5], common[10]];
     if (kind === 'configmaps') return [common[0], card('▤', 'Data Keys', `${Object.keys(raw?.data ?? {}).length} keys`, Object.keys(raw?.data ?? {}).map((key) => <InspectorValue key={key} label={key} value="Configured" copy />)), card('◈', 'Binary Data', `${Object.keys(raw?.binaryData ?? {}).length} keys`, Object.keys(raw?.binaryData ?? {}).map((key) => <InspectorValue key={key} label={key} value="Configured" copy />)), common[10]];
     if (kind === 'secrets') return [common[0], card('◆', 'Secret Type', raw?.type ?? 'Opaque', <InspectorValue label="Type" value={raw?.type ?? 'Opaque'} copy />), card('▤', 'Data Keys', `${Object.keys(raw?.data ?? {}).length} keys`, Object.keys(raw?.data ?? {}).map((key) => <InspectorValue key={key} label={key} value="Value hidden" />)), common[10]];
-    if (kind === 'ingresses') return [common[0], card('⌁', 'Hosts', item.cells.hosts ?? 'No hosts', <InspectorValue label="Hosts" value={item.cells.hosts ?? ''} copy />), card('⇥', 'Rules', `${raw?.spec?.rules?.length ?? 0} rules`, (raw?.spec?.rules ?? []).map((rule: any, i: number) => <InspectorValue key={i} label={rule.host ?? 'default'} value={(rule.http?.paths ?? []).map((path: any) => path.path ?? '/').join(', ')} copy />)), common[10]];
+    if (kind === 'ingresses') return [
+      common[0],
+      card('⌁', 'Hosts', item.cells.hosts || 'No hosts configured', <>
+        <InspectorValue label="Hosts" value={item.cells.hosts ?? ''} copy />
+        <InspectorValue label="Address" value={item.cells.address ?? ''} copy />
+      </>),
+      card('⇥', 'Rules & Paths', `${raw?.spec?.rules?.length ?? 0} rule${(raw?.spec?.rules?.length ?? 0) === 1 ? '' : 's'}`, (raw?.spec?.rules ?? []).flatMap((rule: any, i: number) => (rule.http?.paths ?? []).map((path: any, pathIndex: number) => {
+        const backend = path.backend?.service?.name ?? path.backend?.resource?.name ?? 'backend unavailable';
+        const port = path.backend?.service?.port?.number ?? path.backend?.service?.port?.name;
+        return <InspectorValue key={`${i}-${pathIndex}`} label={rule.host ? `${rule.host}${path.path ?? '/'}` : (path.path ?? '/')} value={`${backend}${port ? `:${port}` : ''}`} copy />;
+      }))),
+      common[10],
+    ];
     return common;
   })();
   const imageSummary = detail ? (containers.length ? `${containers.length} container${containers.length === 1 ? '' : 's'}` : 'No images configured') : 'View resource description';
   const cards = detail ? [
-    <InspectorCard key="image" icon="◉" title="Image Version" summary={imageSummary}>{containers.map((c) => <InspectorValue key={c.name} label={c.name} value={c.image} mono />)}</InspectorCard>,
-    <InspectorCard key="containers" icon="▣" title="Containers" summary={`${containers.length} configured`}>{containers.map((c) => <InspectorValue key={c.name} label={c.name} value={`${c.image}${c.ports.length ? ` · ports: ${c.ports.map((p) => `${p.containerPort}/${p.protocol ?? 'TCP'}`).join(', ')}` : ''}`} mono />)}</InspectorCard>,
-    <InspectorCard key="environment" icon="⌘" title="Environments" summary={`${containers.reduce((total, c) => total + c.env.length, 0)} variables`}>{containers.flatMap((c) => c.env.map((env) => <InspectorValue key={`${c.name}-${env.name}`} label={`${c.name} · ${env.name}`} value={env.value ?? env.valueFrom ?? '—'} mono />))}</InspectorCard>,
-    <InspectorCard key="resources" icon="◈" title="Resources" summary="Requests and limits">{containers.flatMap((c) => [<InspectorValue key={`${c.name}-requests`} label={`${c.name} · Requests`} value={Object.entries(c.resources?.requests ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')} />, <InspectorValue key={`${c.name}-limits`} label={`${c.name} · Limits`} value={Object.entries(c.resources?.limits ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')} />])}</InspectorCard>,
-    <InspectorCard key="probes" icon="♡" title="Probes" summary={`${containers.filter((c) => c.livenessProbe || c.readinessProbe || c.startupProbe).length} container(s) configured`}>{containers.flatMap((c) => ['livenessProbe', 'readinessProbe', 'startupProbe'].map((key) => { const probe = c[key as 'livenessProbe' | 'readinessProbe' | 'startupProbe']; return <InspectorValue key={`${c.name}-${key}`} label={`${c.name} · ${key.replace('Probe', '')}`} value={probe?.detail ?? 'Not configured'} />; }))}</InspectorCard>,
-    <InspectorCard key="overview" icon="ⓘ" title="Overview" summary={`${detail.ready}/${detail.replicas} replicas ready`}><InspectorValue label="Strategy" value={detail.strategyType} /><InspectorValue label="Selector" value={Object.entries(detail.selector).map(([k, v]) => `${k}=${v}`).join(', ')} /><InspectorValue label="Created" value={humanDate(detail.createdAt)} /></InspectorCard>,
+    <InspectorCard key="image" icon="◉" title="Image Version" summary={imageSummary} searchQuery={searchQuery}>{containers.map((c) => <InspectorValue key={c.name} label={c.name} value={c.image} mono />)}</InspectorCard>,
+    <InspectorCard key="containers" icon="▣" title="Containers" summary={`${containers.length} configured`} searchQuery={searchQuery}>{containers.map((c) => <InspectorValue key={c.name} label={c.name} value={`${c.image}${c.ports.length ? ` · ports: ${c.ports.map((p) => `${p.containerPort}/${p.protocol ?? 'TCP'}`).join(', ')}` : ''}`} mono />)}</InspectorCard>,
+    <InspectorCard key="environment" icon="⌘" title="Environments" summary={`${containers.reduce((total, c) => total + c.env.length, 0)} variables`} searchQuery={searchQuery}>{containers.flatMap((c) => c.env.map((env) => <InspectorValue key={`${c.name}-${env.name}`} label={`${c.name} · ${env.name}`} value={env.value ?? env.valueFrom ?? '—'} mono />))}</InspectorCard>,
+    <InspectorCard key="resources" icon="◈" title="Resources" summary="Requests and limits" searchQuery={searchQuery}>{containers.flatMap((c) => [<InspectorValue key={`${c.name}-requests`} label={`${c.name} · Requests`} value={Object.entries(c.resources?.requests ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')} />, <InspectorValue key={`${c.name}-limits`} label={`${c.name} · Limits`} value={Object.entries(c.resources?.limits ?? {}).map(([k, v]) => `${k}: ${v}`).join(', ')} />])}</InspectorCard>,
+    <InspectorCard key="probes" icon="♡" title="Probes" summary={`${containers.filter((c) => c.livenessProbe || c.readinessProbe || c.startupProbe).length} container(s) configured`} searchQuery={searchQuery}>{containers.flatMap((c) => ['livenessProbe', 'readinessProbe', 'startupProbe'].map((key) => { const probe = c[key as 'livenessProbe' | 'readinessProbe' | 'startupProbe']; return <InspectorValue key={`${c.name}-${key}`} label={`${c.name} · ${key.replace('Probe', '')}`} value={probe?.detail ?? 'Not configured'} />; }))}</InspectorCard>,
+    <InspectorCard key="overview" icon="ⓘ" title="Overview" summary={`${detail.ready}/${detail.replicas} replicas ready`} searchQuery={searchQuery}><InspectorValue label="Strategy" value={detail.strategyType} /><InspectorValue label="Selector" value={Object.entries(detail.selector).map(([k, v]) => `${k}=${v}`).join(', ')} /><InspectorValue label="Created" value={humanDate(detail.createdAt)} /></InspectorCard>,
   ] : genericCards;
   return (
     <div className="k8s-inspector">
@@ -679,7 +718,7 @@ function ResourceInspector({ item, kind, detail, description, loading, error }: 
           if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
             e.currentTarget.scrollLeft += e.deltaY;
           }
-        }}>{cards}</div>
+        }}>{searchQuery.trim() && cards.filter(Boolean).length === 0 ? <div className="k8s-inspector-empty">No card details match “{searchQuery}”.</div> : cards}</div>
       </>}
     </div>
   );
@@ -703,7 +742,20 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   const [loadingFrame, setLoadingFrame] = useState(0);
   const [inspectors, setInspectors] = useState<Array<{ id: string; index: number; detail: KubeDeploymentDetail | null; description: string; loading: boolean; error: string }>>([]);
   const [activeInspectorId, setActiveInspectorId] = useState('');
+  const [cardSearch, setCardSearch] = useState('');
   const kindLabel = KUBE_RESOURCE_OPTIONS.find((o) => o.id === tab.kind)?.label ?? tab.kind;
+
+  // An inspector belongs to the resource list it was opened from. Do not
+  // carry a Pod/Deployment inspector into another kind or namespace, or the
+  // next resource view can show stale cards and stale JSON-backed fields.
+  useEffect(() => {
+    setInspectors([]);
+    setActiveInspectorId('');
+    setCardSearch('');
+  }, [tab.id, tab.kind, tab.namespace]);
+  useEffect(() => {
+    setCardSearch('');
+  }, [activeInspectorId]);
   const isNamespaced = tab.kind !== 'nodes';
   const canOpenWorkload = tab.kind === 'deployments';
   const canOpenPod = tab.kind === 'pods';
@@ -733,6 +785,17 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
     }
   };
   const activeInspector = inspectors.find((entry) => entry.id === activeInspectorId);
+  const inspectorEntries: K8sInspectorEntry[] = inspectors.flatMap((entry) => {
+    const resource = tab.resources.items[entry.index];
+    return resource ? [{ id: entry.id, name: resource.name }] : [];
+  });
+  const closeInspector = (id: string) => {
+    setInspectors((previous) => previous.filter((entry) => entry.id !== id));
+    if (id === activeInspectorId) {
+      const next = inspectors.find((entry) => entry.id !== id);
+      setActiveInspectorId(next?.id ?? '');
+    }
+  };
   // Watch mode: poll the current resource table every watchInterval seconds —
   // silently (no loading state, no page flicker).
   const intervalMs = Math.max(1, tab.watchInterval ?? 1) * 1000;
@@ -830,6 +893,8 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
           <div className="text" style={{ marginTop: 8 }}>No {kindLabel.toLowerCase()} in {isNamespaced ? (tab.namespace === '*' ? 'any namespace' : `namespace '${tab.namespace}'`) : 'this cluster'}</div>
         </div>
       ) : (
+        <div className="k8s-resource-table-wrap" aria-busy={tab.loading || tab.refreshing ? 'true' : 'false'}>
+          {tab.refreshing && <div className="k8s-refresh-indicator"><span className="k8s-refresh-dot" />Refreshing {kindLabel.toLowerCase()}…</div>}
         <div className="table-container">
           <div className="table-header">
             <div className="cell" style={{ width: 36, flexShrink: 0 }}>#</div>
@@ -864,7 +929,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
                 {tab.resources.columns.map((c) => (
                   <div className="cell" key={c.key} style={{ ...colStyle(c), fontWeight: c.key === 'name' && selected ? 600 : 400 }}>
                     {tab.kind === 'pods' && (c.key === 'cpu' || c.key === 'memory')
-                      ? <PodUsageCell value={item.cells[c.key] ?? ''} metricsAvailable={item.cells[`${c.key}MetricsAvailable`] === 'true'} />
+                      ? <PodResourceCell value={item.cells[c.key] ?? ''} metricsAvailable={item.cells[`${c.key}MetricsAvailable`] === 'true'} />
                       : <ResourceCell column={c} value={item.cells[c.key] ?? ''} warning={c.key === 'cpu' ? item.cells.highCpu === 'true' : c.key === 'memory' ? item.cells.highMemory === 'true' : false} />}
                   </div>
                 ))}
@@ -877,10 +942,18 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
             );
           })}
         </div>
+        </div>
       )}
-      {activeInspector && tab.resources.items[activeInspector.index] && <div className="k8s-inspector-shell">
-        <div className="k8s-inspector-tabbar">{inspectors.map((entry) => { const resource = tab.resources.items[entry.index]; return resource ? <button key={entry.id} type="button" className={entry.id === activeInspectorId ? 'is-active' : ''} onClick={() => setActiveInspectorId(entry.id)}><span>{resource.name}</span><b onClick={(e) => { e.stopPropagation(); setInspectors((previous) => previous.filter((candidate) => candidate.id !== entry.id)); if (entry.id === activeInspectorId) setActiveInspectorId(inspectors.find((candidate) => candidate.id !== entry.id)?.id ?? ''); }} title="Close detail">×</b></button> : null; })}</div>
-        <ResourceInspector
+      {activeInspector && tab.resources.items[activeInspector.index] && <K8sResourceInspector
+        entries={inspectorEntries}
+        activeId={activeInspectorId}
+        searchQuery={cardSearch}
+        onActivate={setActiveInspectorId}
+        onSearchChange={setCardSearch}
+        onClose={closeInspector}
+      >
+        <K8sInspectorErrorBoundary>
+          <ResourceInspector
           key={activeInspector.id}
           item={tab.resources.items[activeInspector.index]}
           kind={tab.kind}
@@ -888,8 +961,10 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
           description={activeInspector.description}
           loading={activeInspector.loading}
           error={activeInspector.error}
-        />
-      </div>}
+          searchQuery={cardSearch}
+          />
+        </K8sInspectorErrorBoundary>
+      </K8sResourceInspector>}
     </div>
   );
 }
@@ -973,10 +1048,14 @@ function PodLogsView({ tab, onClose, onToggleWatch, onWatchInterval, onRefresh, 
         <div style={{ flex: 1 }} />
         <button className="back-btn" onClick={onClose} title="Close tab">✕</button>
       </div>
-      {tab.loading ? <div className="state-message">Loading pod logs...</div> : tab.error ? <div className="state-message error">{tab.error}</div> : (
-        <pre ref={logRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', margin: 0, padding: 16, color: 'var(--text-primary)', background: 'var(--bg-primary)', font: '12px/1.55 var(--font-mono)', whiteSpace: tab.wrap ? 'pre-wrap' : 'pre', wordBreak: tab.wrap ? 'break-word' : 'normal', userSelect: 'text' }}>
-          {tab.logs || 'No logs available.'}
-        </pre>
+      {tab.loading ? <div className="state-message">Loading pod logs...</div> : !tab.logs && tab.error ? <div className="state-message error">{tab.error}</div> : (
+        <>
+          {tab.logsRefreshing && <div className="k8s-refresh-indicator"><span className="k8s-refresh-dot" />Refreshing logs…</div>}
+          {tab.error && <div className="k8s-inline-warning">{tab.error}</div>}
+          <pre ref={logRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', margin: 0, padding: 16, color: 'var(--text-primary)', background: 'var(--bg-primary)', font: '12px/1.55 var(--font-mono)', whiteSpace: tab.wrap ? 'pre-wrap' : 'pre', wordBreak: tab.wrap ? 'break-word' : 'normal', userSelect: 'text' }}>
+            {tab.logs || 'No logs available.'}
+          </pre>
+        </>
       )}
     </div>
   );
@@ -1043,7 +1122,7 @@ function DeploymentPods({ tab, onSelect, onOpen }: {
             return (
               <div key={item.key} className={`table-row ${selected ? 'selected' : ''}`} style={podRowStyle(item.cells.status ?? '', item.cells.owner ?? '', selected)} onClick={() => onSelect(i)} onDoubleClick={() => onOpen(i)} title="Select replica; press Enter to open logs">
                 <div className="cell" style={{ width: 36, flexShrink: 0, color: 'var(--text-dim)' }}>{i + 1}</div>
-                {pods.columns.map((c) => <div className="cell" key={c.key} style={{ ...colStyle(c), ...(c.key === 'status' ? { color: podStatusColor(item.cells.status ?? '') } : {}) }}>{c.key === 'cpu' || c.key === 'memory' ? <PodUsageCell value={item.cells[c.key] ?? ''} metricsAvailable={item.cells[`${c.key}MetricsAvailable`] === 'true'} /> : <ResourceCell column={c} value={item.cells[c.key] ?? ''} warning={c.key === 'cpu' ? item.cells.highCpu === 'true' : c.key === 'memory' ? item.cells.highMemory === 'true' : false} />}</div>)}
+                {pods.columns.map((c) => <div className="cell" key={c.key} style={{ ...colStyle(c), ...(c.key === 'status' ? { color: podStatusColor(item.cells.status ?? '') } : {}) }}>{c.key === 'cpu' || c.key === 'memory' ? <PodResourceCell value={item.cells[c.key] ?? ''} metricsAvailable={item.cells[`${c.key}MetricsAvailable`] === 'true'} /> : <ResourceCell column={c} value={item.cells[c.key] ?? ''} warning={c.key === 'cpu' ? item.cells.highCpu === 'true' : c.key === 'memory' ? item.cells.highMemory === 'true' : false} />}</div>)}
               </div>
             );
           })}
@@ -1515,6 +1594,7 @@ export function K8sView({
         />
       ) : activeContextTab ? (
         <ContextTabView
+          key={`${activeContextTab.id}:${activeContextTab.kind}:${activeContextTab.namespace}`}
           tab={activeContextTab}
           searchQuery={searchQuery}
           onNamespaceChange={onTabNamespaceChange}

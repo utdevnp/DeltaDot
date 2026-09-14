@@ -1286,7 +1286,12 @@ select:focus-visible {
 .k8s-row-view-button:hover { border-color: var(--border-blue); background: var(--tint-blue); color: var(--accent-blue); }
 .k8s-inspector { position: relative; display: flex; flex-direction: column; flex: 0 0 min(38vh, 330px); min-height: 190px; border-top: 1px solid var(--border-strong); background: var(--bg-secondary); box-shadow: 0 -8px 22px color-mix(in srgb, var(--glow-blue) 12%, transparent); z-index: 2; }
 .k8s-inspector-shell { display: flex; flex-direction: column; min-height: 0; flex: 0 0 min(41vh, 360px); }
-.k8s-inspector-tabbar { display: flex; gap: 5px; min-height: 36px; padding: 5px 14px 0; overflow-x: auto; background: color-mix(in srgb, var(--bg-primary) 82%, var(--accent-blue) 18%); }
+.k8s-inspector-tabbar { display: flex; align-items: flex-end; gap: 8px; min-height: 36px; padding: 5px 14px 0; overflow: hidden; background: color-mix(in srgb, var(--bg-primary) 82%, var(--accent-blue) 18%); }
+.k8s-inspector-tabs { display: flex; min-width: 0; gap: 5px; overflow-x: auto; }
+.k8s-card-search-box { display: flex; align-items: center; flex: 0 0 190px; gap: 5px; height: 29px; margin-left: auto; margin-bottom: 2px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px 6px 0 0; background: var(--bg-tertiary); color: var(--text-dim); }
+.k8s-card-search-box input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: 11px var(--font-sans); }
+.k8s-card-search-box input::placeholder { color: var(--text-dim); }
+.k8s-card-search-box button { padding: 0 2px; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 15px; }
 .k8s-inspector-tabbar button { display: inline-flex; align-items: center; gap: 8px; max-width: 220px; padding: 7px 10px 7px 12px; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: 7px 7px 0 0; background: transparent; color: var(--text-secondary); cursor: pointer; font: 11px var(--font-sans); white-space: nowrap; transition: background .15s, border-color .15s, color .15s; }
 .k8s-inspector-tabbar button:hover { background: var(--tint-blue); color: var(--text-primary); }
 .k8s-inspector-tabbar button.is-active { border-color: var(--border-blue); border-bottom-color: var(--accent-blue); background: var(--bg-secondary); color: var(--text-primary); font-weight: 650; }
@@ -1311,6 +1316,12 @@ select:focus-visible {
 .k8s-inspector-card-summary { margin-top: 8px; color: var(--text-secondary); font-size: 11px; }
 .k8s-inspector-card-detail { margin: 7px -2px 0; overflow: visible; }
 .k8s-inspector-loading { padding: 4px 16px 0; color: var(--text-dim); font-size: 10px; }
+.k8s-inspector-empty { display: grid; place-items: center; min-width: 100%; color: var(--text-dim); font-size: 12px; }
+.k8s-resource-table-wrap { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.k8s-refresh-indicator { display: flex; align-items: center; gap: 6px; flex: 0 0 24px; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--tint-blue); color: var(--accent-blue); font-size: 10px; }
+.k8s-refresh-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-blue); box-shadow: var(--glow-blue); animation: k8s-refresh-pulse 1s ease-in-out infinite; }
+.k8s-inline-warning { flex: 0 0 auto; padding: 5px 12px; border-bottom: 1px solid var(--border-yellow); background: var(--tint-yellow); color: var(--accent-yellow); font-size: 10px; }
+@keyframes k8s-refresh-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 .k8s-inspector-card.is-active .k8s-inspector-card-detail { max-height: 190px; overflow-y: auto; scrollbar-width: none; }
 .k8s-inspector-card.is-active .k8s-inspector-card-detail::-webkit-scrollbar { display: none; }
 .k8s-inspector-inline-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 10px; }
@@ -1320,12 +1331,9 @@ select:focus-visible {
 .k8s-inspector-metric { padding: 7px 9px; border-bottom: 1px solid var(--border); }
 .k8s-inspector-metric > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-dim); font-size: 10px; }
 .k8s-inspector-metric strong { color: var(--text-primary); font: 650 11px var(--font-mono); }
-.k8s-inspector-metric-track { position: relative; height: 22px; margin-top: 7px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-tertiary); }
-.k8s-inspector-metric-track > span { position: absolute; inset: 0 auto 0 0; display: block; border-radius: inherit; background: linear-gradient(90deg, var(--accent-green), color-mix(in srgb, var(--accent-green) 78%, var(--accent-cyan))); transition: width .25s ease; }
+.k8s-inspector-metric-track { position: relative; height: 8px; margin-top: 7px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-tertiary); }
+.k8s-inspector-metric-track > span { position: absolute; inset: 0 auto 0 0; display: block; min-width: 2px; border-radius: inherit; background: var(--accent-green); transition: width .25s ease; }
 .k8s-inspector-metric small { display: block; margin-top: 4px; color: var(--text-dim); font-size: 10px; }
-.k8s-table-usage { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-secondary); font: 10px var(--font-mono); white-space: nowrap; }
-.k8s-table-usage-track { display: inline-block; width: 34px; height: 5px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-tertiary); }
-.k8s-table-usage-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent-green); transition: width .25s ease; }
 .k8s-card-more { padding: 8px 9px; color: var(--accent-blue); font-size: 11px; font-weight: 650; }
 .k8s-copy-button { display: inline-grid; place-items: center; width: 19px; height: 19px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 11px; }
 .k8s-copy-button:hover { border-color: var(--border-blue); background: var(--tint-blue); color: var(--accent-blue); }
