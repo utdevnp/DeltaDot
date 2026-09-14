@@ -8,7 +8,39 @@ import type {
   KubeDiffRow,
   KubeDiffSection,
   KubeDiffStatus,
+  KubePodStatusSummary,
+  KubeResourceItem,
 } from './types.js';
+
+const POD_SUMMARY_ERROR_STATUSES = new Set([
+  'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'CreateContainerError',
+  'RunContainerError', 'InvalidImageName', 'OOMKilled', 'Evicted', 'Error', 'Failed',
+  'Unknown', 'ContainerStatusUnknown', 'DeadlineExceeded',
+]);
+
+/** Summarize pod health for the compact context-tab status indicators. */
+export function summarizeKubePods(items: KubeResourceItem[]): KubePodStatusSummary {
+  return items.reduce<KubePodStatusSummary>((summary, item) => {
+    const status = item.cells.status ?? '';
+    const normalized = status.replace(/^Init:/, '');
+    const [ready, total] = (item.cells.ready ?? '').split('/').map(Number);
+    const hasReadyCount = Number.isFinite(ready) && Number.isFinite(total) && total > 0;
+    summary.total += 1;
+    if (normalized === 'Terminating') summary.terminating += 1;
+    else if (POD_SUMMARY_ERROR_STATUSES.has(normalized) || status.startsWith('Error')) summary.error += 1;
+    else if (
+      status.includes('not ready')
+      || status.startsWith('Init:')
+      || normalized === 'Pending'
+      || (hasReadyCount && ready < total)
+      || (normalized === 'Running' && !hasReadyCount)
+    ) summary.notReady += 1;
+    else if (normalized === 'Running' && ready === total) summary.running += 1;
+    else if (normalized === 'Succeeded') summary.running += 1;
+    else summary.notReady += 1;
+    return summary;
+  }, { running: 0, error: 0, terminating: 0, notReady: 0, total: 0 });
+}
 
 function row(key: string, label: string, left: unknown, right: unknown): KubeDiffRow {
   const l = left === undefined || left === null ? undefined : String(left);

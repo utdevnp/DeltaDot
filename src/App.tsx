@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind } from '../core/types.js';
+import { summarizeKubePods } from '../core/k8s-compare.js';
 import { getVisibleConfigFields, KUBE_RESOURCE_OPTIONS, WORKSPACE_COLORS } from '../core/types.js';
 import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
@@ -19,6 +20,9 @@ import { WorkspacePanel } from './components/WorkspacePanel';
 import { AppNav } from './components/AppNav';
 import { AddWorkspaceDialog } from './components/AddWorkspaceDialog';
 import { CloneDialog } from './components/CloneDialog';
+import { RepoPRInspector, type RepoPRInspectorTab } from './components/RepoPRInspector';
+import { RepoCommitInspector, type RepoCommitInspectorTab } from './components/RepoCommitInspector';
+import { RepoInspector, type RepoInspectorTab } from './components/RepoInspector';
 
 const PR_PAGE_SIZE = 10;
 type PRPagination = { page: number; hasMore: boolean };
@@ -140,6 +144,12 @@ export function App() {
   const [prDetailLoading, setPRDetailLoading] = useState(false);
   const [prDetailError, setPRDetailError] = useState('');
   const [prSearchState, setPRSearchState] = useState<PRSearchViewState>({ query: '', result: null, selectedPR: 0, selectedPRs: new Set() });
+  const [repoPRTabs, setRepoPRTabs] = useState<RepoPRInspectorTab[]>([]);
+  const [activeRepoPRTab, setActiveRepoPRTab] = useState('');
+  const [repoCommitTabs, setRepoCommitTabs] = useState<RepoCommitInspectorTab[]>([]);
+  const [activeRepoCommitTab, setActiveRepoCommitTab] = useState('');
+  const [activeRepoInspectorTab, setActiveRepoInspectorTab] = useState('');
+  const [openPRCounts, setOpenPRCounts] = useState<Record<string, number | string | null>>({});
 
   // Review state
   const [reviewContext, setReviewContext] = useState<{
@@ -185,6 +195,31 @@ export function App() {
       }).catch(() => { /* non-fatal */ });
     }
   }, [cfg?.token, cfg?.provider]);
+
+  useEffect(() => {
+    if (!cfg?.token?.trim() || repoPaths.length === 0) { setOpenPRCounts({}); return; }
+    let cancelled = false;
+    const loadCounts = async () => {
+      const counts: Record<string, number | string | null> = {};
+      setOpenPRCounts(Object.fromEntries(repoPaths.map((path) => [path, null])));
+      await Promise.all(repoPaths.map(async (repoPath, index) => {
+        if (index > 0) await wait(Math.min(index * 100, 1500));
+        try {
+          const repo = reposRef.current.find((item) => item.path === repoPath);
+          const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
+          if (!repo || !remoteInfo) throw new Error('remote unavailable');
+          const provider = cfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repoPath));
+          if (!provider) throw new Error('provider unavailable');
+          const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, repo.name, 'open', 1, 100);
+          const count = result.prs.filter((pr) => pr.targetBranch === cfg.release).length;
+          counts[repoPath] = result.hasMore ? `${count}+` : count;
+        } catch { counts[repoPath] = null; }
+      }));
+      if (!cancelled) setOpenPRCounts({ ...counts });
+    };
+    void loadCounts();
+    return () => { cancelled = true; };
+  }, [cfg, repoPaths]);
 
   // Local git identity for the currently selected repo
   const currentRepoPath = repos[selectedRepo]?.path;
@@ -336,6 +371,11 @@ export function App() {
       setCfg(config);
       setWorkspacePath(config.workspace);
       setPRs([]);
+      setRepoPRTabs([]);
+      setActiveRepoPRTab('');
+      setRepoCommitTabs([]);
+      setActiveRepoCommitTab('');
+      setActiveRepoInspectorTab('');
       // Reset any stale loading state from a previous/sync that might have been interrupted
       setIsSyncing(false);
       setSyncProgress({ done: 0, total: 0 });
@@ -721,6 +761,41 @@ export function App() {
     setPRLoading(false);
   }, [cfg, prFilter]);
 
+  const fetchRepoPRInspector = useCallback(async (repoPath: string, filter: 'open' | 'closed' | 'all', page = 1) => {
+    if (!cfg) return;
+    const repo = reposRef.current.find((item) => item.path === repoPath);
+    if (!repo) return;
+    setRepoPRTabs((previous) => previous.map((tab) => tab.id === repoPath ? { ...tab, loading: true, error: '' } : tab));
+    try {
+      if (!cfg.token.trim()) throw new Error('API token not configured. Press e to open settings and add your token.');
+      const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
+      if (!remoteInfo) throw new Error('Could not detect remote repository URL.');
+      const provider = cfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repoPath));
+      if (!provider) throw new Error('Could not determine repository provider.');
+      const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, repo.name, filter, page, PR_PAGE_SIZE);
+      result.prs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setRepoPRTabs((previous) => previous.map((tab) => tab.id === repoPath ? { ...tab, prs: page === 1 ? result.prs : [...tab.prs, ...result.prs], page: result.page, hasMore: result.hasMore, loading: false } : tab));
+    } catch (err) {
+      setRepoPRTabs((previous) => previous.map((tab) => tab.id === repoPath ? { ...tab, loading: false, error: err instanceof Error ? err.message : String(err) } : tab));
+    }
+  }, [cfg]);
+
+  const openRepoPRInspector = useCallback((repo: RepoState) => {
+    if (!cfg?.token?.trim()) { showStatusRef.current('API token not configured. Press e to open settings.', true); return; }
+    setSelectedRepo(reposRef.current.findIndex((item) => item.path === repo.path));
+    setRepoPRTabs((previous) => previous.some((tab) => tab.id === repo.path) ? previous : [...previous, { id: repo.path, repo, prs: [], loading: false, error: '', filter: 'open', selected: 0, page: 0, hasMore: false }]);
+    setActiveRepoPRTab(repo.path);
+    setActiveRepoInspectorTab(`pr:${repo.path}`);
+    void fetchRepoPRInspector(repo.path, 'open');
+  }, [cfg, fetchRepoPRInspector]);
+
+  const openRepoCommitInspector = useCallback((repo: RepoState) => {
+    setSelectedRepo(reposRef.current.findIndex((item) => item.path === repo.path));
+    setRepoCommitTabs((previous) => previous.some((tab) => tab.id === repo.path) ? previous : [...previous, { id: repo.path, repo, selected: 0 }]);
+    setActiveRepoCommitTab(repo.path);
+    setActiveRepoInspectorTab(`commit:${repo.path}`);
+  }, []);
+
   const fetchAllPRs = useCallback(async (filterOverride?: 'open' | 'closed' | 'all', reposOverride?: RepoState[]) => {
     const currentCfg = cfgRef.current;
     const currentRepos = reposOverride ?? reposRef.current;
@@ -1000,7 +1075,7 @@ export function App() {
         window.api.k8sNamespaces(ctxName).catch(() => []),
         window.api.k8sResources(ctxName, defaultNs, 'pods'),
       ]);
-      setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, namespaces: nsList, resources: res, loading: false } : t));
+      setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, namespaces: nsList, resources: res, podStatus: summarizeKubePods(res.items), loading: false } : t));
     } catch (err) {
       setKubeContextTabs((prev) => prev.map((t) => t.id === ctxName ? { ...t, loading: false, error: err instanceof Error ? err.message : String(err) } : t));
     }
@@ -1045,10 +1120,14 @@ export function App() {
       resources: hasRows ? { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) } : t.resources,
     } : t));
     try {
-      const res = await window.api.k8sResources(tabId, ns, kind);
+      const [res, podRes] = await Promise.all([
+        window.api.k8sResources(tabId, ns, kind),
+        kind === 'pods' ? Promise.resolve(null) : window.api.k8sResources(tabId, ns, 'pods'),
+      ]);
       if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false, refreshing: false,
+        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
+        podStatus: summarizeKubePods(podRes?.items ?? res.items), selected: 0, loading: false, refreshing: false,
       } : t));
     } catch (err) {
       if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
@@ -1069,10 +1148,14 @@ export function App() {
       resources: hasRows ? { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) } : t.resources,
     } : t));
     try {
-      const res = await window.api.k8sResources(tabId, ns, kind);
+      const [res, podRes] = await Promise.all([
+        window.api.k8sResources(tabId, ns, kind),
+        kind === 'pods' ? Promise.resolve(null) : window.api.k8sResources(tabId, ns, 'pods'),
+      ]);
       if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selected: 0, loading: false, refreshing: false,
+        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
+        podStatus: summarizeKubePods(podRes?.items ?? res.items), selected: 0, loading: false, refreshing: false,
       } : t));
     } catch (err) {
       if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
@@ -1121,12 +1204,16 @@ export function App() {
       resources: { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) },
     } : t));
     try {
-      const res = await window.api.k8sResources(tab.context, tab.namespace, tab.kind);
+      const [res, podRes] = await Promise.all([
+        window.api.k8sResources(tab.context, tab.namespace, tab.kind),
+        tab.kind === 'pods' ? Promise.resolve(null) : window.api.k8sResources(tab.context, tab.namespace, 'pods'),
+      ]);
       if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
         ...t,
         refreshing: false,
         resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
+        podStatus: summarizeKubePods(podRes?.items ?? res.items),
         selected: res.items.length > 0 ? Math.min(t.selected, res.items.length - 1) : 0,
       } : t));
     } catch {
@@ -1988,6 +2075,9 @@ export function App() {
         }
         case 'prdetail': {
           switch (e.key) {
+            case 'o':
+              if (prDetail?.url) window.api.openUrl(prDetail.url);
+              break;
             case 'R': {
               if (prDetail) {
                 const prRepo = prDetail.repoName ? repos.find((r) => r.name === prDetail.repoName) : null;
@@ -2238,6 +2328,7 @@ export function App() {
         );
       case 'list':
         return (
+          <>
           <RepoList
             repos={filteredRepos}
             selected={repos[selectedRepo]?.path ?? ''}
@@ -2245,6 +2336,7 @@ export function App() {
             searchQuery={repoSearchQuery}
             onSearchQueryChange={setRepoSearchQuery}
             ignoredRepoPaths={cfg.ignoredRepos ?? []}
+            openPRCounts={openPRCounts}
             onToggleIgnoreRepo={(repo) => {
               const ignored = new Set(cfg.ignoredRepos ?? []);
               if (ignored.has(repo.path)) ignored.delete(repo.path);
@@ -2256,24 +2348,14 @@ export function App() {
               showStatusRef.current(ignored.has(repo.path) ? `${repo.name} ignored` : `${repo.name} is visible again`);
             }}
             onOpenCommits={(repo) => {
-              setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
               if (repo.status === 'loading' || repo.status === 'syncing') {
                 showStatusRef.current('Repo still loading. Wait for sync to finish.', true);
                 return;
               }
-              setView('commits');
-              setSelectedCommit(0);
+              openRepoCommitInspector(repo);
             }}
             onOpenPRs={(repo) => {
-              setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
-              if (!cfg?.token || cfg.token.trim() === '') {
-                showStatusRef.current('API token not configured. Press e to open settings.', true);
-                return;
-              }
-              setView('prs');
-              setPRError('');
-              setPrAllRepos(false);
-              fetchPRsForRepoRef.current(repo.path);
+              openRepoPRInspector(repo);
             }}
             onSyncRepo={(repo) => syncOneRef.current(repo.path)}
             onOpenCompare={(repo) => {
@@ -2310,6 +2392,106 @@ export function App() {
             release={cfg.release}
             onSyncAll={() => syncAllRef.current()}
           />
+          {(repoPRTabs.length > 0 || repoCommitTabs.length > 0) && (
+            <RepoInspector
+              tabs={[...repoPRTabs.map((tab): RepoInspectorTab => ({ id: `pr:${tab.id}`, label: tab.repo.name, kind: 'prs' })), ...repoCommitTabs.map((tab): RepoInspectorTab => ({ id: `commit:${tab.id}`, label: tab.repo.name, kind: 'commits' }))]}
+              activeId={activeRepoInspectorTab}
+              onActivate={(id) => {
+                setActiveRepoInspectorTab(id);
+                const [kind, ...parts] = id.split(':');
+                if (kind === 'pr') setActiveRepoPRTab(parts.join(':'));
+                else setActiveRepoCommitTab(parts.join(':'));
+              }}
+              onClose={(id) => {
+                const [kind, ...parts] = id.split(':');
+                const path = parts.join(':');
+                if (kind === 'pr') {
+                  setRepoPRTabs((previous) => previous.filter((tab) => tab.id !== path));
+                  const next = repoPRTabs.find((tab) => tab.id !== path);
+                  const fallback = next ? `pr:${next.id}` : repoCommitTabs[0] ? `commit:${repoCommitTabs[0].id}` : '';
+                  setActiveRepoInspectorTab(fallback);
+                  if (next) setActiveRepoPRTab(next.id);
+                  else if (repoCommitTabs[0]) setActiveRepoCommitTab(repoCommitTabs[0].id);
+                } else {
+                  setRepoCommitTabs((previous) => previous.filter((tab) => tab.id !== path));
+                  const next = repoCommitTabs.find((tab) => tab.id !== path);
+                  const fallback = next ? `commit:${next.id}` : repoPRTabs[0] ? `pr:${repoPRTabs[0].id}` : '';
+                  setActiveRepoInspectorTab(fallback);
+                  if (next) setActiveRepoCommitTab(next.id);
+                  else if (repoPRTabs[0]) setActiveRepoPRTab(repoPRTabs[0].id);
+                }
+              }}
+            >
+          {repoPRTabs.length > 0 && activeRepoInspectorTab === `pr:${activeRepoPRTab}` && (
+            <RepoPRInspector
+              tabs={repoPRTabs}
+              activeId={activeRepoPRTab}
+              onActivate={setActiveRepoPRTab}
+              onClose={(id) => {
+                setRepoPRTabs((previous) => {
+                  const next = previous.filter((tab) => tab.id !== id);
+                  if (activeRepoPRTab === id) setActiveRepoPRTab(next[next.length - 1]?.id ?? '');
+                  return next;
+                });
+              }}
+              onRefresh={(id) => {
+                const tab = repoPRTabs.find((item) => item.id === id);
+                if (tab) void fetchRepoPRInspector(id, tab.filter);
+              }}
+              onFilterChange={(id, filter) => {
+                setRepoPRTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, filter, selected: 0, prs: [] } : tab));
+                void fetchRepoPRInspector(id, filter);
+              }}
+              onSelect={(id, index) => setRepoPRTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, selected: index } : tab))}
+              onOpenPR={(id, index) => {
+                const tab = repoPRTabs.find((item) => item.id === id);
+                const pr = tab?.prs[index];
+                if (!tab || !pr) return;
+                setSelectedRepo(reposRef.current.findIndex((item) => item.path === tab.repo.path));
+                setPRs(tab.prs);
+                setSelectedPR(index);
+                setPrAllRepos(false);
+                setPRDetail(null);
+                setView('prdetail');
+                setPRDetailLoading(true);
+                setPRDetailError('');
+                window.api.getRemoteOwnerRepo(tab.repo.path).then((remoteInfo) => window.api.fetchPRDetail(remoteInfo?.owner ?? '', pr.repoName || tab.repo.name, pr.number, cfg.provider, cfg.token)).then(setPRDetail).catch((err) => setPRDetailError(err instanceof Error ? err.message : String(err))).finally(() => setPRDetailLoading(false));
+              }}
+              onLoadMore={(id) => {
+                const tab = repoPRTabs.find((item) => item.id === id);
+                if (tab) void fetchRepoPRInspector(id, tab.filter, tab.page + 1);
+              }}
+              onOpenConfig={() => setView('config')}
+              embedded
+            />
+          )}
+          {repoCommitTabs.length > 0 && activeRepoInspectorTab === `commit:${activeRepoCommitTab}` && (
+            <RepoCommitInspector
+              tabs={repoCommitTabs}
+              activeId={activeRepoCommitTab}
+              onActivate={setActiveRepoCommitTab}
+              onClose={(id) => {
+                setRepoCommitTabs((previous) => {
+                  const next = previous.filter((tab) => tab.id !== id);
+                  if (activeRepoCommitTab === id) setActiveRepoCommitTab(next[next.length - 1]?.id ?? '');
+                  return next;
+                });
+              }}
+              onSelect={(id, index) => setRepoCommitTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, selected: index } : tab))}
+              onOpenDetail={(id, hash) => {
+                const tab = repoCommitTabs.find((item) => item.id === id);
+                if (!tab) return;
+                setSelectedRepo(reposRef.current.findIndex((item) => item.path === tab.repo.path));
+                setSelectedCommit(tab.selected);
+                window.api.fetchCommitDetail(tab.repo.path, hash).then(setDetail);
+                setView('detail');
+              }}
+              embedded
+            />
+          )}
+            </RepoInspector>
+          )}
+          </>
         );
       case 'commits': {
         const repo = repos[selectedRepo];
@@ -2367,6 +2549,8 @@ export function App() {
                 const prRepo = pr.repoName ? repos.find((r) => r.name === pr.repoName) : null;
                 const repo = prRepo ?? repos[selectedRepo];
                 if (!repo) return;
+                setPRDetail(null);
+                setView('prdetail');
                 setPRDetailLoading(true);
                 setPRDetailError('');
                 window.api.getRemoteOwnerRepo(repo.path).then((remoteInfo) => {
@@ -2379,7 +2563,6 @@ export function App() {
                     cfg.token,
                   ).then((detail) => {
                     setPRDetail(detail);
-                    setView('prdetail');
                     setPRDetailLoading(false);
                   }).catch((err) => {
                     setPRDetailError(err instanceof Error ? err.message : String(err));
@@ -2394,14 +2577,32 @@ export function App() {
           />
         );
       case 'prdetail':
-        return prDetail ? (
+        return (
           <PRDetailView
             prDetail={prDetail}
             loading={prDetailLoading}
             error={prDetailError}
             ownAuthor={ownAuthor}
             gitUserName={gitUserName}
-            onBack={() => setView('prs')}
+            onBack={() => { setView('prs'); setPRDetail(null); setPRDetailError(''); setPRDetailLoading(false); }}
+            onApprove={async (comment) => {
+              const prRepo = prDetail.repoName ? repos.find((repo) => repo.name === prDetail.repoName) : null;
+              const repoPath = prRepo?.path ?? repos[selectedRepo]?.path;
+              if (!repoPath) throw new Error('Repository not found for this pull request.');
+              const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
+              if (!remoteInfo) throw new Error('Could not determine the remote repository.');
+              let owner = remoteInfo.owner;
+              let repo = remoteInfo.repo;
+              try {
+                const prUrl = new URL(prDetail.url);
+                const match = prUrl.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/\d+/);
+                if (match) {
+                  owner = match[1]!;
+                  repo = match[2]!;
+                }
+              } catch { /* Fall back to the repository's configured remote. */ }
+              await window.api.approvePR(owner, repo, prDetail.number, cfg.provider, cfg.token, comment);
+            }}
             onReview={() => {
               const prRepo = prDetail.repoName ? repos.find((r) => r.name === prDetail.repoName) : null;
               setReviewContext({
@@ -2434,7 +2635,7 @@ export function App() {
               })();
             }}
           />
-        ) : null;
+        );
       case 'review':
         return (
           <ReviewView

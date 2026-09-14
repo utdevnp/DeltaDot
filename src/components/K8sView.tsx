@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   KubeContext, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeContainer, KubeDeploymentDetail,
   KubeResourceColumn, KubeResourceItem,
+  KubePodStatusSummary,
 } from '../../core/types.js';
 import { KUBE_RESOURCE_OPTIONS } from '../../core/types.js';
 import { timeAgo } from '../../core/utils.js';
 import { SPINNER } from '../../core/utils.js';
-import { compareContextImages, extractImageVersion, type KubeImageCompareRow } from '../../core/k8s-compare.js';
+import { compareContextImages, extractImageVersion, summarizeKubePods, type KubeImageCompareRow } from '../../core/k8s-compare.js';
 import { K8sInspectorErrorBoundary, K8sResourceInspector, type K8sInspectorEntry } from './k8s/K8sResourceInspector.js';
 
 interface K8sViewProps {
@@ -521,6 +522,25 @@ function podRowStyle(status: string, owner: string, selected: boolean): React.CS
   };
 }
 
+function PodStatusSummary({ summary, loading }: { summary?: KubePodStatusSummary; loading?: boolean }) {
+  const statuses = summary ? [
+    { key: 'running', label: 'Running pods', value: summary.running, color: 'var(--accent-green)' },
+    { key: 'error', label: 'Error pods', value: summary.error, color: 'var(--accent-red)' },
+    { key: 'terminating', label: 'Terminating pods', value: summary.terminating, color: 'var(--accent-blue)' },
+    { key: 'not-ready', label: 'Not-ready pods', value: summary.notReady, color: 'var(--accent-yellow)' },
+  ].filter((status) => status.value > 0 || (status.key === 'running' && summary.total > 0)) : [];
+  if (statuses.length === 0) return null;
+  return (
+    <div className={`k8s-pod-status-summary${loading ? ' is-loading' : ''}`} aria-label="Pod status summary">
+      {statuses.map((status, index) => (
+        <span className="k8s-pod-status-item" key={status.key} title={String(status.value)} data-tooltip={String(status.value)}>
+          <span className="k8s-pod-status-dot" style={{ background: status.color, boxShadow: `0 0 0 2px color-mix(in srgb, ${status.color} 18%, transparent)`, animationDelay: `${index * 180}ms` }} />
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function colStyle(c: KubeResourceColumn): React.CSSProperties {
   const base: React.CSSProperties = { boxSizing: 'border-box' };
   if (c.key === 'name') {
@@ -761,6 +781,9 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   const canOpenPod = tab.kind === 'pods';
   const showPodFilter = tab.kind === 'pods';
   const filters = tab.podFilters ?? ['ReplicaSet'];
+  const visiblePodStatus = tab.kind === 'pods'
+    ? summarizeKubePods(tab.resources.items.filter((item) => filters.includes(item.cells.owner ?? 'None')))
+    : tab.podStatus;
   // Owner-kind filter chips are built from the kinds actually present (Job,
   // ReplicaSet, DaemonSet, StatefulSet, 'None', …) — no name-based logic.
   const ownerKinds = [...new Set(tab.resources.items.map((i) => i.cells.owner ?? 'None'))].sort();
@@ -827,7 +850,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', minHeight: 50, maxHeight: 112, borderBottom: '1px solid var(--border)', flexShrink: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', minHeight: 50, maxHeight: 112, borderBottom: '1px solid var(--border)', flexShrink: 0, overflow: 'visible' }}>
         {isNamespaced && (
           <div style={{ width: 180, flexShrink: 0, padding: '7px 8px 7px 16px', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center' }}>
             <select
@@ -842,6 +865,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
             </select>
           </div>
         )}
+        <PodStatusSummary summary={visiblePodStatus} loading={tab.loading || tab.refreshing} />
         <div style={{ flex: 1, minWidth: 0, padding: '7px 16px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignContent: 'center', gap: 4, minHeight: 36 }}>
             {KUBE_RESOURCE_OPTIONS.map((option) => {
@@ -894,7 +918,6 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
         </div>
       ) : (
         <div className="k8s-resource-table-wrap" aria-busy={tab.loading || tab.refreshing ? 'true' : 'false'}>
-          {tab.refreshing && <div className="k8s-refresh-indicator"><span className="k8s-refresh-dot" />Refreshing {kindLabel.toLowerCase()}…</div>}
         <div className="table-container">
           <div className="table-header">
             <div className="cell" style={{ width: 36, flexShrink: 0 }}>#</div>

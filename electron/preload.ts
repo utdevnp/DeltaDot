@@ -20,6 +20,7 @@ export interface DeltaDotAPI {
   fetchPRs: (owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number) => Promise<PRPage>;
   fetchPRDetail: (owner: string, repo: string, prNumber: number, provider: Provider, token: string) => Promise<PRDetail>;
   createPRComment: (owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => Promise<string>;
+  approvePR: (owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => Promise<void>;
   getGitUser: (repoPath: string) => Promise<{ name: string; email: string }>;
   getGitHubUser: (token: string) => Promise<{ login: string; name: string } | null>;
   fetchJira: (config: { url: string; email: string; apiToken: string }, issueKey: string) => Promise<JiraIssue>;
@@ -80,6 +81,7 @@ const api: DeltaDotAPI = {
   fetchPRs: (owner, repo, provider, token, repoName, state, page, pageSize) => ipcRenderer.invoke('fetch-prs', owner, repo, provider, token, repoName, state, page, pageSize),
   fetchPRDetail: (owner, repo, prNumber, provider, token) => ipcRenderer.invoke('fetch-pr-detail', owner, repo, prNumber, provider, token),
   createPRComment: (owner, repo, prNumber, provider, token, body) => ipcRenderer.invoke('create-pr-comment', owner, repo, prNumber, provider, token, body),
+  approvePR: (owner, repo, prNumber, provider, token, body) => ipcRenderer.invoke('approve-pr', owner, repo, prNumber, provider, token, body),
   getGitUser: (repoPath) => ipcRenderer.invoke('get-git-user', repoPath),
   getGitHubUser: (token) => ipcRenderer.invoke('get-github-user', token),
   fetchJira: (config, issueKey) => ipcRenderer.invoke('fetch-jira', config, issueKey),

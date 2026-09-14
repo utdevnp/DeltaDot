@@ -21,7 +21,7 @@ import {
 } from '../core/config.js';
 import { analyzeRepo, fetchCommitDetail, run } from '../core/git.js';
 import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/remote.js';
-import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, detectProviderFromRemote } from '../core/pr.js';
+import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, approvePR, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
 import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, getKubeResources, restartKubeDeployment, restartAllKubeDeployments, deleteKubeJob, deleteKubeResource, describeKubeResource } from '../core/k8s.js';
@@ -251,6 +251,10 @@ ipcMain.handle('fetch-pr-detail', async (_event, owner: string, repo: string, pr
 
 ipcMain.handle('create-pr-comment', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => {
   return createPRComment(owner, repo, prNumber, provider, token, body);
+});
+
+ipcMain.handle('approve-pr', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => {
+  return approvePR(owner, repo, prNumber, provider, token, body);
 });
 
 ipcMain.handle('get-git-user', async (_event, repoPath: string) => {

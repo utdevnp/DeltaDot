@@ -50,6 +50,8 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
     { key: 'q', desc: 'quit' },
   ],
   prdetail: [
+    { key: 'o', desc: 'open PR' },
+    { key: 'a', desc: 'approve' },
     { key: 'R', desc: 'review' },
     { key: 'b / Esc', desc: 'back' },
     { key: 'q', desc: 'quit' },

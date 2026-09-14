@@ -203,3 +203,15 @@ export async function createGitLabPRComment(
   const data = await res.json().catch(() => null) as { web_url?: string } | null;
   return data?.web_url ?? '';
 }
+
+export async function approveGitLabPR(
+  owner: string, repo: string, prNumber: number, token: string,
+): Promise<void> {
+  const projectId = encodeURIComponent(`${owner}/${repo}`);
+  const url = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests/${prNumber}/approve`;
+  const res = await fetch(url, { method: 'POST', headers: bearerHeaders(token) });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`GitLab approval error ${res.status}: ${res.statusText} - ${errorBody}`);
+  }
+}

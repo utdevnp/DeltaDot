@@ -296,6 +296,21 @@ export async function createGitHubPRComment(
   return data?.html_url ?? '';
 }
 
+export async function approveGitHubPR(
+  owner: string, repo: string, prNumber: number, token: string, body: string,
+): Promise<void> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body, event: 'APPROVE' }),
+  });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`GitHub approval error ${res.status} for ${owner}/${repo}#${prNumber}: ${res.statusText} - ${errorBody}`);
+  }
+}
+
 // ─── Authenticated user ─────────────────────────────────────────────────────
 
 /**

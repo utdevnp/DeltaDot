@@ -1,7 +1,7 @@
 import type { PRDetail, PRPage, Provider } from '../../types.js';
-import { fetchGitHubPRs, fetchGitHubPRDetail, createGitHubPRComment } from './github.js';
-import { fetchGitLabPRs, fetchGitLabPRDetail, createGitLabPRComment } from './gitlab.js';
-import { fetchBitbucketPRs, fetchBitbucketPRDetail, createBitbucketPRComment } from './bitbucket.js';
+import { fetchGitHubPRs, fetchGitHubPRDetail, createGitHubPRComment, approveGitHubPR } from './github.js';
+import { fetchGitLabPRs, fetchGitLabPRDetail, createGitLabPRComment, approveGitLabPR } from './gitlab.js';
+import { fetchBitbucketPRs, fetchBitbucketPRDetail, createBitbucketPRComment, approveBitbucketPR } from './bitbucket.js';
 
 export async function fetchPRsByProvider(
   owner: string,
@@ -59,4 +59,20 @@ export async function createPRCommentByProvider(
     default:
       return createGitHubPRComment(owner, repo, prNumber, token, body);
   }
+}
+
+export async function approvePRByProvider(
+  owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string,
+): Promise<void> {
+  if (provider === 'gitlab') {
+    await approveGitLabPR(owner, repo, prNumber, token);
+    if (body.trim()) await createGitLabPRComment(owner, repo, prNumber, token, body);
+    return;
+  }
+  if (provider === 'bitbucket') {
+    await approveBitbucketPR(owner, repo, prNumber, token);
+    if (body.trim()) await createBitbucketPRComment(owner, repo, prNumber, token, body);
+    return;
+  }
+  await approveGitHubPR(owner, repo, prNumber, token, body);
 }

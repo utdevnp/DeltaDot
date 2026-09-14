@@ -223,3 +223,14 @@ export async function createBitbucketPRComment(
   const data = await res.json().catch(() => null) as { links?: { html?: { href?: string } } } | null;
   return data?.links?.html?.href ?? '';
 }
+
+export async function approveBitbucketPR(
+  owner: string, repo: string, prNumber: number, token: string,
+): Promise<void> {
+  const url = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests/${prNumber}/approve`;
+  const res = await fetch(url, { method: 'POST', headers: bearerHeaders(token) });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`Bitbucket approval error ${res.status}: ${res.statusText} - ${errorBody}`);
+  }
+}

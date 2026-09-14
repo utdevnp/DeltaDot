@@ -389,8 +389,17 @@ export interface KubeContextTab {
   selected: number;
   loading: boolean;
   refreshing?: boolean;
+  podStatus?: KubePodStatusSummary;
   error: string;
   podDrilldown?: KubePodDrilldown;
+}
+
+export interface KubePodStatusSummary {
+  running: number;
+  error: number;
+  terminating: number;
+  notReady: number;
+  total: number;
 }
 
 // ─── Kubernetes generic resource tables (renderer-safe) ─────────────────────

@@ -22,6 +22,7 @@ interface RepoListProps {
   onCopyRemote: (repo: RepoState) => void;
   ignoredRepoPaths: string[];
   onToggleIgnoreRepo: (repo: RepoState) => void;
+  openPRCounts: Record<string, number | string | null>;
 }
 
 type MenuIconName = 'commits' | 'pulls' | 'sync' | 'compare' | 'external' | 'copy' | 'ignore';
@@ -62,7 +63,7 @@ function statusText(repo: RepoState, frame: number): { text: string; color: stri
   }
 }
 
-export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, base, release, onSyncAll, searchQuery, onSearchQueryChange, onOpenCommits, onOpenPRs, onSyncRepo, onOpenCompare, onOpenRemote, onCopyPath, onCopyRemote, ignoredRepoPaths, onToggleIgnoreRepo }: RepoListProps) {
+export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, base, release, onSyncAll, searchQuery, onSearchQueryChange, onOpenCommits, onOpenPRs, onSyncRepo, onOpenCompare, onOpenRemote, onCopyPath, onCopyRemote, ignoredRepoPaths, onToggleIgnoreRepo, openPRCounts }: RepoListProps) {
   const [frame, setFrame] = useState(0);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; repo: RepoState } | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
@@ -135,6 +136,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, b
         <div className="cell" style={{ width: 30, flexShrink: 0 }}>#</div>
         <div className="cell" style={{ flex: 2, minWidth: 140 }}>REPO</div>
         <div className="cell" style={{ width: 80, flexShrink: 0 }}>DIFF</div>
+        <div className="cell" style={{ width: 70, flexShrink: 0 }}>OPEN PRs</div>
         <div className="cell" style={{ width: 90, flexShrink: 0 }}>VERSION</div>
         <div className="cell" style={{ width: 90, flexShrink: 0 }}>AUTHOR</div>
         <div className="cell" style={{ width: 70, flexShrink: 0 }}>AGE</div>
@@ -203,6 +205,11 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, b
               color: st.color,
             }}>
               {st.text}
+            </div>
+
+            {/* VERSION */}
+            <div className="cell" style={{ width: 70, flexShrink: 0, color: 'var(--accent-blue)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+              {openPRCounts[repo.path] === null ? '…' : (openPRCounts[repo.path] ?? '—')}
             </div>
 
             {/* VERSION */}
