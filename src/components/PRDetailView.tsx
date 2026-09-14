@@ -32,6 +32,13 @@ function initials(value: string): string {
   return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
 }
 
+function renderPatch(patch: string) {
+  return patch.split('\n').map((line, index) => {
+    const type = line.startsWith('@@') ? 'hunk' : line.startsWith('+++') || line.startsWith('---') ? 'file' : line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : 'context';
+    return <span className={`pr-diff-line ${type}`} key={`${index}-${line}`}>{line || ' '}{index < patch.split('\n').length - 1 ? '\n' : ''}</span>;
+  });
+}
+
 function CopyIcon() {
   return <svg className="repo-context-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4" /></svg>;
 }
@@ -47,7 +54,7 @@ function CopyableValue({ value, mono = false }: { value: string; mono?: boolean 
   };
 
   return <span className={`pr-copyable-value${mono ? ' mono' : ''}`}>
-    <span>{value}</span><button type="button" className="pr-copy-button" onClick={copy} title={copied ? 'Copied' : `Copy ${value}`} aria-label={copied ? `${value} copied` : `Copy ${value}`}><CopyIcon /></button>
+    <span>{value}</span><button type="button" className="pr-copy-button" onClick={(event) => { event.stopPropagation(); void copy(); }} title={copied ? 'Copied' : `Copy ${value}`} aria-label={copied ? `${value} copied` : `Copy ${value}`}><CopyIcon /></button>
   </span>;
 }
 
@@ -63,15 +70,21 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
     const handleShortcut = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT' || target?.isContentEditable;
+      if (approvalOpen && event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!approvalSubmitting) setApprovalOpen(false);
+        return;
+      }
       if (!typing && event.key.toLowerCase() === 'a') {
         event.preventDefault();
         setApprovalOpen(true);
         setApprovalError('');
       }
     };
-    window.addEventListener('keydown', handleShortcut);
-    return () => window.removeEventListener('keydown', handleShortcut);
-  }, []);
+    window.addEventListener('keydown', handleShortcut, true);
+    return () => window.removeEventListener('keydown', handleShortcut, true);
+  }, [approvalOpen, approvalSubmitting]);
 
   if (loading) return <div className="state-message">Loading PR detail...</div>;
   if (error) return <div className="state-message error">{error}</div>;
@@ -125,11 +138,23 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
         <div><span>Comments</span><strong>{prDetail.commentsCount ?? prDetail.comments?.length ?? 0}</strong></div>
       </div>
 
-      <div className="pr-meta-grid">
-        <div className="pr-meta-card"><div className="label">Source branch</div><div className="value"><CopyableValue value={prDetail.sourceBranch} mono /></div></div>
-        <div className="pr-meta-card"><div className="label">Target branch</div><div className="value"><CopyableValue value={prDetail.targetBranch} mono /></div></div>
-        <div className="pr-meta-card"><div className="label">Created</div><div className="value" title={new Date(prDetail.createdAt).toLocaleString()}>{timeAgo(prDetail.createdAt)} ago</div></div>
-        <div className="pr-meta-card"><div className="label">Reviewers</div><div className="value pr-copyable-list">{prDetail.requestedReviewers?.length ? prDetail.requestedReviewers.map((reviewer) => <CopyableValue key={reviewer} value={reviewer} />) : 'None requested'}</div></div>
+      <div className="pr-info-grid">
+        <div className="pr-info-item"><span>From</span><CopyableValue value={prDetail.sourceBranch} mono /></div>
+        <div className="pr-info-item"><span>Into</span><CopyableValue value={prDetail.targetBranch} mono /></div>
+        <div className="pr-info-item"><span>Created</span><strong title={new Date(prDetail.createdAt).toLocaleString()}>{timeAgo(prDetail.createdAt)} ago</strong></div>
+        <div className="pr-info-item"><span>Updated</span><strong title={new Date(prDetail.updatedAt).toLocaleString()}>{timeAgo(prDetail.updatedAt)} ago</strong></div>
+        {prDetail.mergedAt && <div className="pr-info-item"><span>Merged</span><strong title={new Date(prDetail.mergedAt).toLocaleString()}>{timeAgo(prDetail.mergedAt)} ago</strong></div>}
+        <div className="pr-info-item"><span>Approved</span><strong className="pr-info-positive">{prDetail.approvedBy?.length ?? 0}</strong></div>
+        <div className="pr-info-item"><span>Changes requested</span><strong className="pr-info-negative">{prDetail.changesRequestedBy?.length ?? 0}</strong></div>
+        <div className="pr-info-item"><span>Review comments</span><strong>{prDetail.reviewCommentsCount ?? 0}</strong></div>
+        <div className="pr-info-item"><span>Activity</span><strong>{(prDetail.commentsCount ?? prDetail.comments?.length ?? 0) + (prDetail.reviewCommentsCount ?? 0)} events</strong></div>
+        <div className="pr-info-item"><span>Labels</span><strong>{prDetail.labels?.length ?? 0}</strong></div>
+        <div className="pr-info-item"><span>Participants</span><strong>{new Set([prDetail.author, ...(prDetail.requestedReviewers ?? []), ...(prDetail.approvedBy ?? []), ...(prDetail.changesRequestedBy ?? []), ...(prDetail.commentedBy ?? [])].filter(Boolean)).size}</strong></div>
+        <div className="pr-info-item"><span>Author</span><CopyableValue value={prDetail.author} /></div>
+        <div className="pr-info-item"><span>Reviewers</span><span className="pr-info-value-list">{prDetail.requestedReviewers?.length ? prDetail.requestedReviewers.map((reviewer) => <CopyableValue key={reviewer} value={reviewer} />) : 'None assigned'}</span></div>
+        <div className="pr-info-item"><span>Assignees</span><span className="pr-info-value-list">{prDetail.assignees?.length ? prDetail.assignees.map((assignee) => <CopyableValue key={assignee} value={assignee} />) : 'None assigned'}</span></div>
+        {prDetail.mergedBy && <div className="pr-info-item"><span>Merged by</span><CopyableValue value={prDetail.mergedBy} /></div>}
+        {prDetail.mergeCommitSha && <div className="pr-info-item"><span>Merge commit</span><CopyableValue value={prDetail.mergeCommitSha} mono /></div>}
       </div>
 
       {(prDetail.labels?.length || prDetail.approvedBy?.length || prDetail.changesRequestedBy?.length) ? <div className="pr-detail-chips">
@@ -145,11 +170,12 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
         <div className="pr-section-heading"><h2>Files changed</h2><span>{prDetail.files.length} files</span></div>
         <div className="pr-file-list">{prDetail.files.map((file) => {
           const expanded = expandedFiles.has(file.path);
-          return <div className="pr-file-item" key={file.path}>
-            <button type="button" className="pr-file-header" onClick={() => file.patch && toggleFile(file.path)} aria-expanded={expanded} disabled={!file.patch}>
+            const displayPath = file.previousPath ? `${file.previousPath} → ${file.path}` : file.path;
+            return <div className="pr-file-item" key={file.path}>
+            <div className={`pr-file-header${file.patch ? '' : ' no-patch'}`} onClick={() => file.patch && toggleFile(file.path)} onKeyDown={(event) => { if (file.patch && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggleFile(file.path); } }} role={file.patch ? 'button' : undefined} tabIndex={file.patch ? 0 : undefined} aria-expanded={file.patch ? expanded : undefined}>
               <span className="pr-file-chevron" style={{ transform: expanded ? 'rotate(90deg)' : undefined }}>›</span><span className="pr-file-status" style={{ color: fileStatusColor(file.status) }}>{file.status}</span>
-              <span className="pr-file-path" title={file.previousPath ? `${file.previousPath} → ${file.path}` : file.path}>{file.previousPath ? `${file.previousPath} → ` : ''}{file.path}</span><span className="pr-file-counts"><b>+{file.additions}</b> <i>-{file.deletions}</i></span>
-            </button>{expanded && file.patch && <pre className="pr-file-diff">{file.patch}</pre>}
+              <span className="pr-file-path-copy"><CopyableValue value={displayPath} mono /></span><span className="pr-file-counts"><b>+{file.additions}</b> <i>-{file.deletions}</i></span>
+            </div>{expanded && file.patch && <pre className="pr-file-diff">{renderPatch(file.patch)}</pre>}
           </div>;
         })}</div>
       </section>}
@@ -162,6 +188,10 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
             <div className="pr-comment-meta"><CopyableValue value={author} /><span>{new Date(comment.createdAt).toLocaleString()}</span>{comment.path && <code>{comment.path}{comment.line ? `:${comment.line}` : ''}</code>}</div><div className="pr-comment-body">{comment.body}</div>
           </div></article>;
         })}</div>
+      </section>}
+      {(!prDetail.comments || prDetail.comments.length === 0) && prDetail.files && prDetail.files.length > 0 && <section className="detail-section pr-detail-section pr-comments-section">
+        <div className="pr-section-heading"><h2>Comments</h2><span>0</span></div>
+        <div className="pr-empty-comments"><span>○</span><strong>No comments yet</strong><p>Discussion and review feedback will appear here.</p></div>
       </section>}
       </div>
       {approvalOpen && <div className="pr-search-overlay pr-approval-overlay" role="presentation" onClick={() => !approvalSubmitting && setApprovalOpen(false)}>
