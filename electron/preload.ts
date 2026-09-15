@@ -52,7 +52,12 @@ export interface DeltaDotAPI {
   k8sDeployments: (contextName: string, namespace: string) => Promise<KubeDeploymentSummary[]>;
   k8sDeploymentDetail: (contextName: string, namespace: string, name: string) => Promise<KubeDeploymentDetail>;
   k8sDeploymentPods: (contextName: string, namespace: string, name: string) => Promise<KubeResourceList>;
-  k8sPodLogs: (contextName: string, namespace: string, name: string, container?: string) => Promise<string>;
+  k8sPodLogs: (contextName: string, namespace: string, name: string, container?: string, tailLines?: number) => Promise<string>;
+  k8sPodLogStreamStart: (streamId: string, contextName: string, namespace: string, name: string, container?: string) => Promise<void>;
+  k8sPodLogStreamStop: (streamId: string) => Promise<void>;
+  onK8sPodLogChunk: (callback: (streamId: string, chunk: string) => void) => () => void;
+  onK8sPodLogStreamStatus: (callback: (streamId: string, status: 'end' | 'error', message?: string) => void) => () => void;
+  saveK8sLogs: (filename: string, content: string) => Promise<string | null>;
   k8sRestartDeployment: (contextName: string, namespace: string, name: string) => Promise<void>;
   k8sRestartAllDeployments: (contextName: string, namespace: string) => Promise<number>;
   k8sDeleteJob: (contextName: string, namespace: string, name: string) => Promise<void>;
@@ -128,7 +133,20 @@ const api: DeltaDotAPI = {
   k8sDeployments: (contextName, namespace) => ipcRenderer.invoke('k8s-deployments', contextName, namespace),
   k8sDeploymentDetail: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-detail', contextName, namespace, name),
   k8sDeploymentPods: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-pods', contextName, namespace, name),
-  k8sPodLogs: (contextName, namespace, name, container) => ipcRenderer.invoke('k8s-pod-logs', contextName, namespace, name, container),
+  k8sPodLogs: (contextName, namespace, name, container, tailLines) => ipcRenderer.invoke('k8s-pod-logs', contextName, namespace, name, container, tailLines),
+  k8sPodLogStreamStart: (streamId, contextName, namespace, name, container) => ipcRenderer.invoke('k8s-pod-log-stream-start', streamId, contextName, namespace, name, container),
+  k8sPodLogStreamStop: (streamId) => ipcRenderer.invoke('k8s-pod-log-stream-stop', streamId),
+  onK8sPodLogChunk: (callback) => {
+    const handler = (_event: any, streamId: string, chunk: string) => callback(streamId, chunk);
+    ipcRenderer.on('k8s-pod-log-chunk', handler);
+    return () => ipcRenderer.removeListener('k8s-pod-log-chunk', handler);
+  },
+  onK8sPodLogStreamStatus: (callback) => {
+    const handler = (_event: any, streamId: string, status: 'end' | 'error', message?: string) => callback(streamId, status, message);
+    ipcRenderer.on('k8s-pod-log-stream-status', handler);
+    return () => ipcRenderer.removeListener('k8s-pod-log-stream-status', handler);
+  },
+  saveK8sLogs: (filename, content) => ipcRenderer.invoke('save-k8s-logs', filename, content),
   k8sRestartDeployment: (contextName, namespace, name) => ipcRenderer.invoke('k8s-restart-deployment', contextName, namespace, name),
   k8sRestartAllDeployments: (contextName, namespace) => ipcRenderer.invoke('k8s-restart-all-deployments', contextName, namespace),
   k8sDeleteJob: (contextName, namespace, name) => ipcRenderer.invoke('k8s-delete-job', contextName, namespace, name),

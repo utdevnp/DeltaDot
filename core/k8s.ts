@@ -2,6 +2,7 @@
 // Reads the local kubeconfig (KUBECONFIG env / ~/.kube/config) and talks to
 // the cluster's API server. Never import from renderer code.
 import * as k8s from '@kubernetes/client-node';
+import { PassThrough } from 'node:stream';
 import type {
   KubeContext,
   KubeContainer,
@@ -35,6 +36,11 @@ function describeError(err: unknown, contextName: string): string {
     return `Cannot reach cluster for context '${contextName}' — is it running and is your kubeconfig valid?`;
   }
   return msg;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
+    || err instanceof Error && err.name === 'AbortError';
 }
 
 function makeConfig(contextName: string): k8s.KubeConfig {
@@ -293,17 +299,56 @@ export async function getKubePodLogs(
   namespace: string,
   name: string,
   container?: string,
+  tailLines?: number,
 ): Promise<string> {
   const kc = makeConfig(contextName);
   const core = kc.makeApiClient(k8s.CoreV1Api);
   try {
     const pod: any = await core.readNamespacedPod({ name, namespace });
     const selectedContainer = container || pod.spec?.containers?.[0]?.name;
-    const result: any = await core.readNamespacedPodLog({
-      name, namespace, container: selectedContainer, tailLines: 500,
-    });
+    const logOptions: any = {
+      name,
+      namespace,
+      container: selectedContainer,
+      timestamps: true,
+    };
+    if (tailLines !== undefined) logOptions.tailLines = tailLines;
+    const result: any = await core.readNamespacedPodLog(logOptions);
     return typeof result === 'string' ? result : String(result ?? '');
   } catch (err) {
+    throw new Error(describeError(err, contextName));
+  }
+}
+
+export async function streamKubePodLogs(
+  contextName: string,
+  namespace: string,
+  name: string,
+  container: string | undefined,
+  onChunk: (chunk: string) => void,
+  onEnd: () => void,
+  onError: (error: unknown) => void,
+): Promise<AbortController> {
+  const kc = makeConfig(contextName);
+  try {
+    const pod: any = await kc.makeApiClient(k8s.CoreV1Api).readNamespacedPod({ name, namespace });
+    const selectedContainer = container || pod.spec?.containers?.[0]?.name;
+    if (!selectedContainer) throw new Error(`No container found for pod '${name}'.`);
+    const output = new PassThrough();
+    output.setEncoding('utf8');
+    output.on('data', (chunk: string) => onChunk(chunk));
+    output.on('end', onEnd);
+    output.on('error', (err) => {
+      if (!isAbortError(err)) onError(err);
+    });
+    return await new k8s.Log(kc).log(namespace, name, selectedContainer, output, {
+      follow: true,
+      tailLines: 1,
+      timestamps: true,
+    });
+  } catch (err) {
+    if (!isAbortError(err)) onError(err);
+    if (isAbortError(err)) return new AbortController();
     throw new Error(describeError(err, contextName));
   }
 }

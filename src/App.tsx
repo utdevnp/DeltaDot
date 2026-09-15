@@ -49,13 +49,42 @@ function mergeKubeLogSnapshot(previous: string, next: string): string {
   if (!next || next === previous) return previous;
   if (next.startsWith(previous)) return next;
   if (previous.endsWith(next)) return previous;
-  const maxOverlap = Math.min(previous.length, next.length);
+  // Kubernetes returns a moving tail window. Merge only on complete lines so
+  // a matching fragment inside a log message cannot create duplicate output.
+  const previousLines = previous.split('\n');
+  const nextLines = next.split('\n');
+  if (previousLines.at(-1) === '') previousLines.pop();
+  if (nextLines.at(-1) === '') nextLines.pop();
+  const maxOverlap = Math.min(previousLines.length, nextLines.length);
   for (let length = maxOverlap; length > 0; length -= 1) {
-    if (previous.slice(-length) === next.slice(0, length)) {
-      return previous + next.slice(length);
+    const previousTail = previousLines.slice(-length);
+    const nextHead = nextLines.slice(0, length);
+    if (previousTail.every((line, i) => line === nextHead[i])) {
+      const appended = nextLines.slice(length).join('\n');
+      if (!appended) return previous;
+      return `${previous}${previous.endsWith('\n') ? '' : '\n'}${appended}`;
     }
   }
   return `${previous}${previous.endsWith('\n') ? '' : '\n'}${next}`;
+}
+
+function getKubeLogDelta(previous: string, next: string): string {
+  if (!previous) return next;
+  if (!next || next === previous) return '';
+  if (next.startsWith(previous)) return next.slice(previous.length).replace(/^\n/, '');
+  const previousLines = previous.split('\n');
+  const nextLines = next.split('\n');
+  if (previousLines.at(-1) === '') previousLines.pop();
+  if (nextLines.at(-1) === '') nextLines.pop();
+  const maxOverlap = Math.min(previousLines.length, nextLines.length);
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    if (previousLines.slice(-length).every((line, i) => line === nextLines[i])) {
+      return nextLines.slice(length).join('\n');
+    }
+  }
+  // A restarted pod or a rotated log has no common tail. Treat the new
+  // snapshot as the beginning of a new stream.
+  return next;
 }
 
 function containerStatusMap(json: string): Record<string, string> {
@@ -176,6 +205,54 @@ export function App() {
   const [kubeDescription, setKubeDescription] = useState<{ title: string; json: string; query: string; error?: string } | null>(null);
   const kubeResourceRequestRef = useRef<Record<string, number>>({});
   const kubeResourceInFlightRef = useRef(new Set<string>());
+  const kubeLogSnapshotsRef = useRef<Record<string, string>>({});
+  const kubeClearedLogsRef = useRef(new Set<string>());
+  const kubeLogRetryCountsRef = useRef(new Map<string, number>());
+  const kubeLogRetryTimersRef = useRef(new Map<string, number>());
+
+  useEffect(() => {
+    if (typeof window.api.onK8sPodLogChunk !== 'function') return undefined;
+    return window.api.onK8sPodLogChunk((streamId, chunk) => {
+    const retryTimer = kubeLogRetryTimersRef.current.get(streamId);
+    if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    kubeLogRetryTimersRef.current.delete(streamId);
+    const previousSnapshot = kubeLogSnapshotsRef.current[streamId] ?? '';
+    const incoming = kubeClearedLogsRef.current.has(streamId)
+      ? getKubeLogDelta(previousSnapshot, chunk)
+      : chunk;
+    kubeLogSnapshotsRef.current[streamId] = mergeKubeLogSnapshot(previousSnapshot, chunk);
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === streamId && t.mode === 'pod-logs'
+      ? { ...t, logs: mergeKubeLogSnapshot(t.logs ?? '', incoming), streamStatus: 'connected', error: '' }
+      : t));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window.api.onK8sPodLogStreamStatus !== 'function') return undefined;
+    return window.api.onK8sPodLogStreamStatus((streamId, status, message) => {
+      const tab = kubeWorkloadTabsRef.current.find((item) => item.id === streamId && item.mode === 'pod-logs');
+      if (!tab?.watch) return;
+      const attempt = (kubeLogRetryCountsRef.current.get(streamId) ?? 0) + 1;
+      kubeLogRetryCountsRef.current.set(streamId, attempt);
+      if (attempt > 5) {
+        setKubeWorkloadTabs((prev) => prev.map((item) => item.id === streamId ? { ...item, watch: false, streamStatus: 'error', error: message || 'Log stream failed after 5 retry attempts.' } : item));
+        return;
+      }
+      setKubeWorkloadTabs((prev) => prev.map((item) => item.id === streamId ? { ...item, streamStatus: 'reconnecting', error: `Log stream disconnected; retrying… (${attempt}/5)` } : item));
+      if (kubeLogRetryTimersRef.current.has(streamId)) return;
+      const retryTimer = window.setTimeout(() => {
+        kubeLogRetryTimersRef.current.delete(streamId);
+        const current = kubeWorkloadTabsRef.current.find((item) => item.id === streamId && item.mode === 'pod-logs');
+        if (!current?.watch) return;
+        if (typeof window.api.k8sPodLogStreamStart !== 'function') return;
+        setKubeWorkloadTabs((prev) => prev.map((item) => item.id === streamId ? { ...item, streamStatus: 'reconnecting', error: 'Retrying log stream…' } : item));
+        void window.api.k8sPodLogStreamStart(streamId, current.context, current.namespace, current.name, current.container).catch((err) => {
+          setKubeWorkloadTabs((prev) => prev.map((item) => item.id === streamId ? { ...item, error: err instanceof Error ? err.message : String(err) } : item));
+        });
+      }, 2000);
+      kubeLogRetryTimersRef.current.set(streamId, retryTimer);
+    });
+  }, []);
 
   const beginKubeResourceRequest = useCallback((tabId: string): number => {
     const next = (kubeResourceRequestRef.current[tabId] ?? 0) + 1;
@@ -1195,6 +1272,10 @@ export function App() {
   const silentRefreshKubeTab = useCallback(async (tabId: string) => {
     const tab = kubeContextTabsRef.current.find((t) => t.id === tabId);
     if (!tab) return;
+    if (typeof window.api.k8sPodLogStreamStart !== 'function' || typeof window.api.k8sPodLogStreamStop !== 'function') {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: false, error: 'Log streaming API is unavailable. Restart DeltaDot to reload the Electron preload bridge.' } : t));
+      return;
+    }
     if (kubeResourceInFlightRef.current.has(tabId)) return;
     kubeResourceInFlightRef.current.add(tabId);
     const requestId = beginKubeResourceRequest(tabId);
@@ -1420,12 +1501,13 @@ export function App() {
     if (existing) { setKubeActiveTab(id); return; }
     const logTab: KubeWorkloadTab = {
       id, context: tab.context, name: drilldown.podName, namespace: drilldown.namespace,
-      label: `log ${drilldown.podName}/${container}`, mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
+      label: `logs · ${container}`, mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
     setKubeActiveTab(id);
     try {
       const logs = await window.api.k8sPodLogs(tab.context, drilldown.namespace, drilldown.podName, container);
+      kubeLogSnapshotsRef.current[id] = logs;
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, logs, loading: false, logsLoading: false } : t));
     } catch (err) {
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, logsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
@@ -1437,16 +1519,38 @@ export function App() {
   }, []);
 
   const toggleKubeLogWatch = useCallback((enabled: boolean) => {
-    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, watch: enabled } : t));
+    const tab = kubeWorkloadTabsRef.current.find((t) => t.id === kubeActiveTabRef.current && t.mode === 'pod-logs');
+    if (!tab) return;
+    if (typeof window.api.k8sPodLogStreamStart !== 'function' || typeof window.api.k8sPodLogStreamStop !== 'function') {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: false, error: 'Log streaming API is unavailable. Fully restart DeltaDot to reload the Electron preload bridge.' } : t));
+      return;
+    }
+    if (!enabled) {
+      kubeLogRetryCountsRef.current.delete(tab.id);
+      const retryTimer = kubeLogRetryTimersRef.current.get(tab.id);
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      kubeLogRetryTimersRef.current.delete(tab.id);
+    } else {
+      kubeLogRetryCountsRef.current.delete(tab.id);
+    }
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: enabled, streamStatus: enabled ? 'connecting' : 'stopped', error: enabled ? t.error : '' } : t));
+    if (enabled) {
+      void window.api.k8sPodLogStreamStart(tab.id, tab.context, tab.namespace, tab.name, tab.container)
+        .then(() => {
+          setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id && t.watch ? { ...t, streamStatus: 'connected', error: '' } : t));
+        })
+        .catch((err) => {
+          setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: false, streamStatus: 'error', error: err instanceof Error ? err.message : String(err) } : t));
+        });
+    } else {
+      void window.api.k8sPodLogStreamStop(tab.id);
+    }
   }, []);
 
   const toggleKubeLogWrap = useCallback((enabled: boolean) => {
     setKubeWorkloadTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, wrap: enabled } : t));
   }, []);
 
-  const setKubeLogWatchInterval = useCallback((seconds: number) => {
-    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, watchInterval: Math.max(1, seconds) } : t));
-  }, []);
 
   const refreshKubeLogs = useCallback(async () => {
     const tab = kubeWorkloadTabsRef.current.find((t) => t.id === kubeActiveTabRef.current && t.mode === 'pod-logs');
@@ -1454,12 +1558,39 @@ export function App() {
     setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, logsRefreshing: true } : t));
     try {
       const logs = await window.api.k8sPodLogs(tab.context, tab.namespace, tab.name, tab.container);
+      const previousSnapshot = kubeLogSnapshotsRef.current[tab.id] ?? '';
+      const wasCleared = kubeClearedLogsRef.current.has(tab.id);
+      const incoming = wasCleared ? getKubeLogDelta(previousSnapshot, logs) : logs;
+      kubeLogSnapshotsRef.current[tab.id] = logs;
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id
-        ? { ...t, logs: mergeKubeLogSnapshot(t.logs ?? '', logs), error: '', logsRefreshing: false }
+        ? { ...t, logs: mergeKubeLogSnapshot(t.logs ?? '', incoming), error: '', logsRefreshing: false }
         : t));
     } catch (err) {
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, logsRefreshing: false, error: err instanceof Error ? err.message : String(err) } : t));
     }
+  }, []);
+
+  const downloadKubeLogs = useCallback(async (mode: 'visible' | 'entire', logContent: string) => {
+    const tab = kubeWorkloadTabsRef.current.find((t) => t.id === kubeActiveTabRef.current && t.mode === 'pod-logs');
+    if (!tab || !tab.container) return;
+    try {
+      const content = mode === 'entire'
+        ? await window.api.k8sPodLogs(tab.context, tab.namespace, tab.name, tab.container, undefined)
+        : logContent;
+      const safe = `${tab.namespace}-${tab.name}-${tab.container}`.replace(/[^a-zA-Z0-9._-]+/g, '-');
+      const savedPath = await window.api.saveK8sLogs(`${safe}.log`, content);
+      if (savedPath) showStatusRef.current(`Logs saved to ${savedPath}`);
+    } catch (err) {
+      showStatusRef.current(err instanceof Error ? err.message : String(err), true);
+    }
+  }, []);
+
+  const clearKubeLogs = useCallback(() => {
+    const tabId = kubeActiveTabRef.current;
+    kubeClearedLogsRef.current.add(tabId);
+    setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tabId && t.mode === 'pod-logs'
+      ? { ...t, logs: '', error: '', logsRefreshing: false }
+      : t));
   }, []);
 
   const selectKubeWorkloadPod = useCallback((workloadId: string, i: number) => {
@@ -1485,13 +1616,14 @@ export function App() {
     }
     const logTab: KubeWorkloadTab = {
       id, context: workload.context, name: pod.name, namespace: pod.namespace,
-      label: `log ${pod.name}${container ? `/${container}` : ''}`,
-      mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
+      label: container ? `logs · ${container}` : 'logs',
+      mode: 'pod-logs', detail: null, container, label: container ? `logs · ${container}` : 'logs', logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
     setKubeActiveTab(id);
     try {
       const logs = await window.api.k8sPodLogs(workload.context, pod.namespace, pod.name, container);
+      kubeLogSnapshotsRef.current[id] = logs;
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, logs, loading: false, logsLoading: false } : t));
     } catch (err) {
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, logsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
@@ -1517,6 +1649,7 @@ export function App() {
     setKubeActiveTab(id);
     try {
       const logs = await window.api.k8sPodLogs(containerTab.context, containerTab.namespace, containerTab.name, container);
+      kubeLogSnapshotsRef.current[id] = logs;
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, logs, loading: false, logsLoading: false } : t));
     } catch (err) {
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, logsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
@@ -1614,6 +1747,7 @@ export function App() {
     }
     if (kubeWorkloadTabs.some((t) => t.id === id)) {
       const closingWorkload = kubeWorkloadTabs.find((t) => t.id === id);
+      if (closingWorkload?.mode === 'pod-logs' && typeof window.api.k8sPodLogStreamStop === 'function') void window.api.k8sPodLogStreamStop(id);
       setKubeWorkloadTabs((prev) => {
         const next = prev.filter((t) => t.id !== id);
         if (kubeActiveTab === id) setKubeActiveTab(fallbackId());
@@ -2681,8 +2815,9 @@ export function App() {
             onOpenContextContainerLogs={openKubeContextContainerLogs}
             onClosePodDrilldown={closeKubePodDrilldown}
             onToggleLogWatch={toggleKubeLogWatch}
-            onLogWatchInterval={setKubeLogWatchInterval}
             onRefreshLogs={refreshKubeLogs}
+            onDownloadLogs={downloadKubeLogs}
+            onClearLogs={clearKubeLogs}
             onToggleLogWrap={toggleKubeLogWrap}
             onSelectWorkloadPod={selectKubeWorkloadPod}
             onOpenPodLogs={openKubePodContainers}

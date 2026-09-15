@@ -21,6 +21,8 @@
   --color-accent-orange: var(--accent-orange);
   --color-accent-purple: var(--accent-purple);
   --color-selection-bg: var(--selection-bg);
+  --color-log-bg: var(--log-bg);
+  --color-log-text: var(--log-text);
 }
 
 /* light: variant — active only when the app's light theme class is on <html> */
@@ -45,6 +47,8 @@
   --accent-orange: #f97316;
   --accent-purple: #a855f7;
   --selection-bg: #1d2f5e;
+  --log-bg: #111827;
+  --log-text: #ffffff;
   /* Button fills — slightly deeper than text accents so white labels stay readable */
   --btn-blue: #2563eb;
   --btn-blue-dark: #1d4ed8;
@@ -89,6 +93,8 @@
   --accent-orange: #c2410c;
   --accent-purple: #9333ea;
   --selection-bg: #dbeafe;
+  --log-bg: #111827;
+  --log-text: #ffffff;
   /* Button fills — deeper than text accents so white labels stay readable */
   --btn-blue: #1d4ed8;
   --btn-blue-dark: #1e40af;

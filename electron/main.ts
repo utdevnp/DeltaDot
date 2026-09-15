@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import { writeFile } from 'fs/promises';
 import {
   loadGlobalConfig,
   saveGlobalConfig,
@@ -24,13 +25,23 @@ import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/re
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, approvePR, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
-import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, getKubeResources, restartKubeDeployment, restartAllKubeDeployments, deleteKubeJob, deleteKubeResource, describeKubeResource } from '../core/k8s.js';
+import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, streamKubePodLogs, getKubeResources, restartKubeDeployment, restartAllKubeDeployments, deleteKubeJob, deleteKubeResource, describeKubeResource } from '../core/k8s.js';
 import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace, KubeResourceKind } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
+const kubeLogStreams = new Map<string, AbortController>();
+
+// The Kubernetes client's undici request can surface an intentional abort as
+// an uncaught exception after the IPC stop handler has completed. Aborting a
+// log stream is normal user activity, so suppress only AbortError here; all
+// other uncaught exceptions keep Electron's normal crash behavior.
+process.on('uncaughtException', (error) => {
+  if (error instanceof Error && error.name === 'AbortError') return;
+  throw error;
+});
 
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
 
@@ -320,8 +331,45 @@ ipcMain.handle('k8s-deployment-pods', async (_event, contextName: string, namesp
   return getKubeDeploymentPods(contextName, namespace, name);
 });
 
-ipcMain.handle('k8s-pod-logs', async (_event, contextName: string, namespace: string, name: string, container?: string) => {
-  return getKubePodLogs(contextName, namespace, name, container);
+ipcMain.handle('k8s-pod-logs', async (_event, contextName: string, namespace: string, name: string, container?: string, tailLines?: number) => {
+  return getKubePodLogs(contextName, namespace, name, container, tailLines);
+});
+
+ipcMain.handle('k8s-pod-log-stream-start', async (_event, streamId: string, contextName: string, namespace: string, name: string, container?: string) => {
+  const existing = kubeLogStreams.get(streamId);
+  existing?.abort();
+  const controller = await streamKubePodLogs(contextName, namespace, name, container,
+    (chunk) => mainWindow?.webContents.send('k8s-pod-log-chunk', streamId, chunk),
+    () => mainWindow?.webContents.send('k8s-pod-log-stream-status', streamId, 'end'),
+    (err) => mainWindow?.webContents.send('k8s-pod-log-stream-status', streamId, 'error', err instanceof Error ? err.message : String(err)),
+  );
+  kubeLogStreams.set(streamId, controller);
+  controller.signal.addEventListener('abort', () => {
+    if (kubeLogStreams.get(streamId) === controller) kubeLogStreams.delete(streamId);
+  }, { once: true });
+});
+
+ipcMain.handle('k8s-pod-log-stream-stop', async (_event, streamId: string) => {
+  const controller = kubeLogStreams.get(streamId);
+  kubeLogStreams.delete(streamId);
+  if (controller && !controller.signal.aborted) {
+    try {
+      controller.abort();
+    } catch (err) {
+      if (!(err instanceof Error && err.name === 'AbortError')) throw err;
+    }
+  }
+});
+
+ipcMain.handle('save-k8s-logs', async (_event, filename: string, content: string) => {
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    title: 'Save Kubernetes logs',
+    defaultPath: filename,
+    filters: [{ name: 'Log files', extensions: ['log', 'txt'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  await writeFile(result.filePath, content, 'utf8');
+  return result.filePath;
 });
 
 ipcMain.handle('k8s-restart-deployment', async (_event, contextName: string, namespace: string, name: string) => {

@@ -343,6 +343,7 @@ export interface KubeWorkloadTab {
   logs?: string;
   container?: string;
   watch?: boolean;
+  streamStatus?: 'stopped' | 'connecting' | 'connected' | 'reconnecting' | 'error';
   watchInterval?: number;
   wrap?: boolean;
   loading: boolean;

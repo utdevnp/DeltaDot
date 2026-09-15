@@ -9,6 +9,7 @@ import { timeAgo } from '../../core/utils.js';
 import { SPINNER } from '../../core/utils.js';
 import { compareContextImages, extractImageVersion, summarizeKubePods, type KubeImageCompareRow } from '../../core/k8s-compare.js';
 import { K8sInspectorErrorBoundary, K8sResourceInspector, type K8sInspectorEntry } from './k8s/K8sResourceInspector.js';
+import { PodLogsView } from './k8s/PodLogsView.js';
 
 interface K8sViewProps {
   contexts: KubeContext[];
@@ -39,8 +40,9 @@ interface K8sViewProps {
   onOpenContextContainerLogs: (i: number) => void;
   onClosePodDrilldown: () => void;
   onToggleLogWatch: (enabled: boolean) => void;
-  onLogWatchInterval: (seconds: number) => void;
   onRefreshLogs: () => void;
+  onDownloadLogs: (mode: 'visible' | 'entire', logContent: string) => void;
+  onClearLogs: () => void;
   onToggleLogWrap: (enabled: boolean) => void;
   onSelectWorkloadPod: (workloadId: string, i: number) => void;
   onOpenPodLogs: (workloadId: string, i?: number) => void;
@@ -1003,16 +1005,34 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
   );
 }
 
-function PodLogsView({ tab, onClose, onToggleWatch, onWatchInterval, onRefresh, onToggleWrap }: {
+function LegacyPodLogsView({ tab, onClose, onToggleWatch, onWatchInterval, onRefresh, onDownload, onToggleWrap }: {
   tab: KubeWorkloadTab;
   onClose: () => void;
   onToggleWatch: (enabled: boolean) => void;
   onWatchInterval: (seconds: number) => void;
   onRefresh: () => void;
+  onDownload: (mode: 'visible' | 'screen' | 'entire', logContent: string) => void;
   onToggleWrap: (enabled: boolean) => void;
 }) {
   const intervalMs = Math.max(1, tab.watchInterval ?? 1) * 1000;
   const logRef = React.useRef<HTMLPreElement>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+  const query = searchQuery.trim().toLowerCase();
+  const visibleLogs = useMemo(() => {
+    if (!query) return tab.logs ?? '';
+    return (tab.logs ?? '').split('\n').filter((line) => line.toLowerCase().includes(query)).join('\n');
+  }, [tab.logs, query]);
+  const getScreenLogs = () => {
+    const element = logRef.current;
+    if (!element) return visibleLogs;
+    const styles = window.getComputedStyle(element);
+    const lineHeight = parseFloat(styles.lineHeight) || 18.6;
+    const paddingTop = parseFloat(styles.paddingTop) || 0;
+    const firstLine = Math.max(0, Math.floor(Math.max(0, element.scrollTop - paddingTop) / lineHeight));
+    const lineCount = Math.max(1, Math.ceil(element.clientHeight / lineHeight));
+    return visibleLogs.split('\n').slice(firstLine, firstLine + lineCount).join('\n');
+  };
 
   useEffect(() => {
     if (!tab.watch) return;
@@ -1028,6 +1048,11 @@ function PodLogsView({ tab, onClose, onToggleWatch, onWatchInterval, onRefresh, 
     <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{tab.namespace}/{tab.name} logs</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 180, maxWidth: 280, marginLeft: 4 }}>
+          <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>⌕</span>
+          <input type="search" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search logs…" aria-label="Search pod logs" style={{ width: '100%', padding: '4px 7px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 11 }} />
+          {query && <span style={{ fontSize: 10, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>{visibleLogs ? `${visibleLogs.split('\n').length} lines` : '0 lines'}</span>}
+        </label>
         <button
           onClick={() => onToggleWatch(!tab.watch)}
           style={{
@@ -1069,14 +1094,41 @@ function PodLogsView({ tab, onClose, onToggleWatch, onWatchInterval, onRefresh, 
           </>
         )}
         <div style={{ flex: 1 }} />
+        <div style={{ position: 'relative' }}>
+          <button
+            type="button"
+            onClick={() => setDownloadMenuOpen((open) => !open)}
+            aria-haspopup="menu"
+            aria-expanded={downloadMenuOpen}
+            title="Download pod logs"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 9px', background: downloadMenuOpen ? 'var(--tint-blue)' : 'var(--bg-tertiary)', border: `1px solid ${downloadMenuOpen ? 'var(--border-blue)' : 'var(--border)'}`, borderRadius: 5, color: downloadMenuOpen ? 'var(--accent-blue)' : 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 500 }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" />
+            </svg>
+            Download <span aria-hidden="true" style={{ fontSize: 10 }}>{downloadMenuOpen ? '▴' : '▾'}</span>
+          </button>
+          {downloadMenuOpen && (
+            <div className="repo-context-menu k8s-download-menu" role="menu" aria-label="Download pod logs" style={{ position: 'absolute', right: 0, top: 'calc(100% + 5px)', minWidth: 210, zIndex: 100 }}>
+              <button type="button" role="menuitem" onClick={() => { setDownloadMenuOpen(false); onDownload('visible', visibleLogs); }}>
+                <span aria-hidden="true">◉</span><span>Visible log</span><kbd>loaded</kbd>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setDownloadMenuOpen(false); onDownload('screen', getScreenLogs()); }}>
+                <span aria-hidden="true">▣</span><span>Screen log</span><kbd>viewport</kbd>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setDownloadMenuOpen(false); onDownload('entire', visibleLogs); }}>
+                <span aria-hidden="true">◎</span><span>Entire log from pod</span><kbd>all</kbd>
+              </button>
+            </div>
+          )}
+        </div>
         <button className="back-btn" onClick={onClose} title="Close tab">✕</button>
       </div>
       {tab.loading ? <div className="state-message">Loading pod logs...</div> : !tab.logs && tab.error ? <div className="state-message error">{tab.error}</div> : (
         <>
-          {tab.logsRefreshing && <div className="k8s-refresh-indicator"><span className="k8s-refresh-dot" />Refreshing logs…</div>}
           {tab.error && <div className="k8s-inline-warning">{tab.error}</div>}
           <pre ref={logRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', margin: 0, padding: 16, color: 'var(--text-primary)', background: 'var(--bg-primary)', font: '12px/1.55 var(--font-mono)', whiteSpace: tab.wrap ? 'pre-wrap' : 'pre', wordBreak: tab.wrap ? 'break-word' : 'normal', userSelect: 'text' }}>
-            {tab.logs || 'No logs available.'}
+            {query ? (visibleLogs || 'No matching logs.') : (tab.logs || 'No logs available.')}
           </pre>
         </>
       )}
@@ -1155,13 +1207,15 @@ function DeploymentPods({ tab, onSelect, onOpen }: {
   );
 }
 
-function WorkloadDetail({ tab, onClose, onSelectPod, onOpenPodLogs, onSelectContainer, onOpenContainerLogs, onToggleLogWatch, onLogWatchInterval, onRefreshLogs, onToggleLogWrap }: {
+function WorkloadDetail({ tab, onClose, onSelectPod, onOpenPodLogs, onSelectContainer, onOpenContainerLogs, onToggleLogWatch, onLogWatchInterval, onRefreshLogs, onDownloadLogs, onClearLogs, onToggleLogWrap }: {
   tab: KubeWorkloadTab; onClose: () => void; onSelectPod: (i: number) => void; onOpenPodLogs: (i: number) => void;
   onSelectContainer: (i: number) => void; onOpenContainerLogs: (i: number) => void;
-  onToggleLogWatch: (enabled: boolean) => void; onLogWatchInterval: (seconds: number) => void; onRefreshLogs: () => void;
+  onToggleLogWatch: (enabled: boolean) => void; onRefreshLogs: () => void;
+  onDownloadLogs: (mode: 'visible' | 'entire', logContent: string) => void;
+  onClearLogs: () => void;
   onToggleLogWrap: (enabled: boolean) => void;
 }) {
-  if (tab.mode === 'pod-logs') return <PodLogsView tab={tab} onClose={onClose} onToggleWatch={onToggleLogWatch} onWatchInterval={onLogWatchInterval} onRefresh={onRefreshLogs} onToggleWrap={onToggleLogWrap} />;
+  if (tab.mode === 'pod-logs') return <PodLogsView tab={tab} onClose={onClose} onToggleWatch={onToggleLogWatch} onRefresh={onRefreshLogs} onDownload={onDownloadLogs} onClearLogs={onClearLogs} onToggleWrap={onToggleLogWrap} />;
   if (tab.mode === 'pod-containers') return <PodContainersView name={tab.name} namespace={tab.namespace} containers={tab.containers ?? []} selectedContainer={tab.selectedContainer ?? 0} onClose={onClose} onSelect={onSelectContainer} onOpenLogs={onOpenContainerLogs} />;
   const d = tab.detail;
 
@@ -1462,7 +1516,7 @@ export function K8sView({
   contexts, contextTabs, activeTab, workloadTabs, compareTab, error, searchQuery, onSearchQueryChange,
   onOpenContextTab, onTabNamespaceChange, onTabKindChange, onTabPodFilterToggle,
   onTabWatchToggle, onTabWatchInterval, onRefreshTab, onSilentRefreshTab, onDescribeResource, onDeleteResource, onCopyResource, onViewResource, onRestartDeployment,
-  onSelect, onOpenWorkload, onOpenPod, onSelectContextContainer, onOpenContextContainerLogs, onClosePodDrilldown, onToggleLogWatch, onLogWatchInterval, onRefreshLogs, onToggleLogWrap, onSelectWorkloadPod, onOpenPodLogs, onSelectWorkloadContainer, onOpenContainerLogs, onCompareContext, onAddCompareContext, onRemoveCompareSide,
+  onSelect, onOpenWorkload, onOpenPod, onSelectContextContainer, onOpenContextContainerLogs, onClosePodDrilldown, onToggleLogWatch, onRefreshLogs, onDownloadLogs, onClearLogs, onToggleLogWrap, onSelectWorkloadPod, onOpenPodLogs, onSelectWorkloadContainer, onOpenContainerLogs, onCompareContext, onAddCompareContext, onRemoveCompareSide,
   onActivateTab, onCloseTab, onRenameTab, onBack,
 }: K8sViewProps) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ctx: string } | null>(null);
@@ -1611,8 +1665,9 @@ export function K8sView({
           onSelectContainer={(i) => onSelectWorkloadContainer(activeWorkloadTab.id, i)}
           onOpenContainerLogs={(i) => onOpenContainerLogs(activeWorkloadTab.id, i)}
           onToggleLogWatch={onToggleLogWatch}
-          onLogWatchInterval={onLogWatchInterval}
           onRefreshLogs={onRefreshLogs}
+          onDownloadLogs={onDownloadLogs}
+          onClearLogs={onClearLogs}
           onToggleLogWrap={onToggleLogWrap}
         />
       ) : activeContextTab ? (
