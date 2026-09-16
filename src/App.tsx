@@ -1273,7 +1273,7 @@ export function App() {
     const tab = kubeContextTabsRef.current.find((t) => t.id === tabId);
     if (!tab) return;
     if (typeof window.api.k8sPodLogStreamStart !== 'function' || typeof window.api.k8sPodLogStreamStop !== 'function') {
-      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: false, error: 'Log streaming API is unavailable. Restart DeltaDot to reload the Electron preload bridge.' } : t));
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: false, error: 'Log streaming API is unavailable. Restart DeltaDot to reload the app bridge.' } : t));
       return;
     }
     if (kubeResourceInFlightRef.current.has(tabId)) return;
@@ -1522,7 +1522,7 @@ export function App() {
     const tab = kubeWorkloadTabsRef.current.find((t) => t.id === kubeActiveTabRef.current && t.mode === 'pod-logs');
     if (!tab) return;
     if (typeof window.api.k8sPodLogStreamStart !== 'function' || typeof window.api.k8sPodLogStreamStop !== 'function') {
-      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: false, error: 'Log streaming API is unavailable. Fully restart DeltaDot to reload the Electron preload bridge.' } : t));
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === tab.id ? { ...t, watch: false, error: 'Log streaming API is unavailable. Fully restart DeltaDot to reload the app bridge.' } : t));
       return;
     }
     if (!enabled) {
@@ -2589,7 +2589,7 @@ export function App() {
                 setView('prdetail');
                 setPRDetailLoading(true);
                 setPRDetailError('');
-                window.api.getRemoteOwnerRepo(tab.repo.path).then((remoteInfo) => window.api.fetchPRDetail(remoteInfo?.owner ?? '', pr.repoName || tab.repo.name, pr.number, cfg.provider, cfg.token)).then(setPRDetail).catch((err) => setPRDetailError(err instanceof Error ? err.message : String(err))).finally(() => setPRDetailLoading(false));
+                window.api.getRemoteOwnerRepo(tab.repo.path).then((remoteInfo) => window.api.fetchPRDetail(remoteInfo?.owner ?? '', pr.repoName || tab.repo.name, pr.number, cfg.provider, cfg.token)).then((detail) => setPRDetail({ ...detail, repoName: detail.repoName || pr.repoName || tab.repo.name })).catch((err) => setPRDetailError(err instanceof Error ? err.message : String(err))).finally(() => setPRDetailLoading(false));
               }}
               onLoadMore={(id) => {
                 const tab = repoPRTabs.find((item) => item.id === id);
@@ -2696,7 +2696,7 @@ export function App() {
                     cfg.provider,
                     cfg.token,
                   ).then((detail) => {
-                    setPRDetail(detail);
+                    setPRDetail({ ...detail, repoName: detail.repoName || pr.repoName || repo.name });
                     setPRDetailLoading(false);
                   }).catch((err) => {
                     setPRDetailError(err instanceof Error ? err.message : String(err));

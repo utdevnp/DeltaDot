@@ -32,6 +32,23 @@ function initials(value: string): string {
   return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
 }
 
+function PersonAvatar({ name, tone = 'blue' }: { name: string; tone?: 'blue' | 'purple' | 'green' }) {
+  return <span className={`pr-person-avatar ${tone}`}>{initials(name)}</span>;
+}
+
+function FactIcon({ type }: { type: 'files' | 'add' | 'remove' | 'commits' | 'conversation' | 'clock' | 'merge' }) {
+  const paths: Record<string, React.ReactNode> = {
+    files: <><path d="M5 3h9l4 4v14H5z" /><path d="M14 3v5h4" /></>,
+    add: <><path d="M12 5v14M5 12h14" /></>,
+    remove: <path d="M5 12h14" />,
+    commits: <><path d="M6 4v16M18 4v5a4 4 0 0 1-4 4H6" /><circle cx="6" cy="4" r="2" /><circle cx="6" cy="20" r="2" /><circle cx="18" cy="4" r="2" /></>,
+    conversation: <><path d="M5 6h14v10H9l-4 3z" /><path d="M8 10h8M8 13h5" /></>,
+    clock: <><circle cx="12" cy="12" r="8" /><path d="M12 7v5l3 2" /></>,
+    merge: <><path d="M6 4v16M18 4v5a4 4 0 0 1-4 4H6" /><circle cx="6" cy="4" r="2" /><circle cx="6" cy="20" r="2" /><circle cx="18" cy="4" r="2" /></>,
+  };
+  return <svg className={`pr-fact-icon ${type}`} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[type]}</svg>;
+}
+
 function renderPatch(patch: string) {
   return patch.split('\n').map((line, index) => {
     const type = line.startsWith('@@') ? 'hunk' : line.startsWith('+++') || line.startsWith('---') ? 'file' : line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : 'context';
@@ -60,6 +77,7 @@ function CopyableValue({ value, mono = false }: { value: string; mono?: boolean 
 
 export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName, onBack, onReview, onApprove }: PRDetailViewProps) {
   const [expandedFiles, setExpandedFiles] = React.useState<Set<string>>(new Set());
+  const [fileQuery, setFileQuery] = React.useState('');
   const [approvalOpen, setApprovalOpen] = React.useState(false);
   const [approvalComment, setApprovalComment] = React.useState('');
   const [approvalSubmitting, setApprovalSubmitting] = React.useState(false);
@@ -96,6 +114,21 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
     return next;
   });
 
+  const visibleFiles = (prDetail.files ?? []).filter((file) => {
+    const query = fileQuery.trim().toLowerCase();
+    return !query || file.path.toLowerCase().includes(query) || file.status.toLowerCase().includes(query);
+  });
+  const reviewers = prDetail.requestedReviewers ?? prDetail.reviewers ?? [];
+  const latestCommit = [...(prDetail.commits ?? [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+  const timelineEvents = [
+    { id: 'opened', date: prDetail.createdAt, username: prDetail.author, text: 'opened this PR', time: `${timeAgo(prDetail.createdAt)} ago`, tone: 'neutral' },
+    ...(latestCommit ? [{ id: 'commits', date: latestCommit.date, username: latestCommit.author, text: `pushed ${prDetail.commitsCount ?? prDetail.commits?.length ?? 1} commits`, time: `${timeAgo(latestCommit.date)} ago`, tone: 'neutral' }] : []),
+    ...(prDetail.comments ?? []).map((comment) => ({ id: `comment-${comment.id}`, date: comment.createdAt, username: comment.author, text: 'commented on this PR', time: `${timeAgo(comment.createdAt)} ago`, tone: 'neutral' })),
+    ...(prDetail.approvedBy ?? []).map((reviewer) => ({ id: `approved-${reviewer}`, date: prDetail.updatedAt, username: reviewer, text: 'approved', time: 'Review recorded', tone: 'approved' })),
+    ...(prDetail.changesRequestedBy ?? []).map((reviewer) => ({ id: `changes-${reviewer}`, date: prDetail.updatedAt, username: reviewer, text: 'requested changes', time: 'Review recorded', tone: 'changes' })),
+    ...(prDetail.mergedAt ? [{ id: 'merged', date: prDetail.mergedAt, username: prDetail.mergedBy || prDetail.author, text: 'merged this PR', time: `${timeAgo(prDetail.mergedAt)} ago`, tone: 'approved' }] : []),
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
   const submitApproval = async () => {
     if (approvalSubmitting || approvalComplete) return;
     setApprovalSubmitting(true);
@@ -113,49 +146,40 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
   return (
     <div className="detail-view pr-detail-view">
       <div className="pr-detail-toolbar">
-        <div className="pr-detail-toolbar-title"><strong>Pull Request Details</strong><span className="pr-detail-repo">{prDetail.repoName ? <CopyableValue value={prDetail.repoName} /> : 'Repository'}</span></div>
-        <div className="pr-detail-toolbar-actions">
-          {prDetail.url && <button type="button" className="detail-action-btn secondary" onClick={() => window.api.openUrl(prDetail.url)} title="Open pull request in provider">Open in provider</button>}
-          <button type="button" className="detail-action-btn primary" onClick={onReview}>✦ Review with AI</button>
-        </div>
+        <div className="pr-detail-toolbar-title"><span>Pull Request</span><b>/</b><strong>{prDetail.repoName}</strong></div>
         <button type="button" className="back-btn" onClick={onBack} aria-label="Back to pull requests" title="Back to pull requests">←</button>
       </div>
 
+      <div className="pr-detail-main-grid">
+        <main className="pr-detail-primary-column">
       <header className="pr-detail-hero">
-        <div className="pr-detail-number">#{prDetail.number}</div>
-        <h1>{prDetail.title}</h1>
+        <div className="pr-reference-header">
+          <div className="pr-reference-heading">
+            <div className="pr-hero-topline"><span className="pr-detail-number">#{prDetail.number}</span><span className="pr-state-badge" style={{ color: stateColor(prDetail.state), borderColor: stateColor(prDetail.state), background: `color-mix(in srgb, ${stateColor(prDetail.state)} 12%, transparent)` }}>{prDetail.state}</span>{prDetail.draft && <span className="pr-detail-muted-badge">Draft</span>}</div>
+            <h1>{prDetail.title}</h1>
         <div className="pr-detail-subline">
-          <span className="pr-state-badge" style={{ color: stateColor(prDetail.state), borderColor: stateColor(prDetail.state), background: `color-mix(in srgb, ${stateColor(prDetail.state)} 12%, transparent)` }}>{prDetail.state}</span>
-          {prDetail.draft && <span className="pr-detail-muted-badge">Draft</span>}
-          <span>opened by <CopyableValue value={prDetail.author} /></span><span>updated {timeAgo(prDetail.updatedAt)} ago</span>
+          <span>opened by <CopyableValue value={prDetail.author} /></span><span>·</span><span>updated {timeAgo(prDetail.updatedAt)} ago</span>
+        </div>
+        <div className="pr-hero-context"><div className="pr-branch-node source"><span>Source</span><CopyableValue value={prDetail.sourceBranch} mono /></div><span className="pr-hero-arrow" aria-label="merges into">→</span><div className="pr-branch-node target"><span>Target</span><CopyableValue value={prDetail.targetBranch} mono /></div></div>
+          </div>
+          <div className="pr-detail-toolbar-actions pr-reference-actions">
+            {prDetail.url && <button type="button" className="detail-action-btn secondary" onClick={() => window.api.openUrl(prDetail.url)} title="Open pull request in provider">↗ Open in provider</button>}
+            <button type="button" className="detail-action-btn approve" onClick={() => { setApprovalOpen(true); setApprovalError(''); }} title="Approve pull request">✓ Approve</button>
+            <button type="button" className="detail-action-btn primary" onClick={onReview}>✦ Review with AI</button>
+          </div>
         </div>
       </header>
 
-      <div className="pr-detail-stats" aria-label="Pull request summary">
-        <div><span>Changes</span><strong><em>+{prDetail.additions ?? 0}</em> <i>-{prDetail.deletions ?? 0}</i></strong></div>
-        <div><span>Files</span><strong>{prDetail.changedFiles ?? prDetail.files?.length ?? 0}</strong></div>
-        <div><span>Commits</span><strong>{prDetail.commitsCount ?? prDetail.commits?.length ?? 0}</strong></div>
-        <div><span>Comments</span><strong>{prDetail.commentsCount ?? prDetail.comments?.length ?? 0}</strong></div>
-      </div>
-
-      <div className="pr-info-grid">
-        <div className="pr-info-item"><span>From</span><CopyableValue value={prDetail.sourceBranch} mono /></div>
-        <div className="pr-info-item"><span>Into</span><CopyableValue value={prDetail.targetBranch} mono /></div>
-        <div className="pr-info-item"><span>Created</span><strong title={new Date(prDetail.createdAt).toLocaleString()}>{timeAgo(prDetail.createdAt)} ago</strong></div>
-        <div className="pr-info-item"><span>Updated</span><strong title={new Date(prDetail.updatedAt).toLocaleString()}>{timeAgo(prDetail.updatedAt)} ago</strong></div>
-        {prDetail.mergedAt && <div className="pr-info-item"><span>Merged</span><strong title={new Date(prDetail.mergedAt).toLocaleString()}>{timeAgo(prDetail.mergedAt)} ago</strong></div>}
-        <div className="pr-info-item"><span>Approved</span><strong className="pr-info-positive">{prDetail.approvedBy?.length ?? 0}</strong></div>
-        <div className="pr-info-item"><span>Changes requested</span><strong className="pr-info-negative">{prDetail.changesRequestedBy?.length ?? 0}</strong></div>
-        <div className="pr-info-item"><span>Review comments</span><strong>{prDetail.reviewCommentsCount ?? 0}</strong></div>
-        <div className="pr-info-item"><span>Activity</span><strong>{(prDetail.commentsCount ?? prDetail.comments?.length ?? 0) + (prDetail.reviewCommentsCount ?? 0)} events</strong></div>
-        <div className="pr-info-item"><span>Labels</span><strong>{prDetail.labels?.length ?? 0}</strong></div>
-        <div className="pr-info-item"><span>Participants</span><strong>{new Set([prDetail.author, ...(prDetail.requestedReviewers ?? []), ...(prDetail.approvedBy ?? []), ...(prDetail.changesRequestedBy ?? []), ...(prDetail.commentedBy ?? [])].filter(Boolean)).size}</strong></div>
-        <div className="pr-info-item"><span>Author</span><CopyableValue value={prDetail.author} /></div>
-        <div className="pr-info-item"><span>Reviewers</span><span className="pr-info-value-list">{prDetail.requestedReviewers?.length ? prDetail.requestedReviewers.map((reviewer) => <CopyableValue key={reviewer} value={reviewer} />) : 'None assigned'}</span></div>
-        <div className="pr-info-item"><span>Assignees</span><span className="pr-info-value-list">{prDetail.assignees?.length ? prDetail.assignees.map((assignee) => <CopyableValue key={assignee} value={assignee} />) : 'None assigned'}</span></div>
-        {prDetail.mergedBy && <div className="pr-info-item"><span>Merged by</span><CopyableValue value={prDetail.mergedBy} /></div>}
-        {prDetail.mergeCommitSha && <div className="pr-info-item"><span>Merge commit</span><CopyableValue value={prDetail.mergeCommitSha} mono /></div>}
-      </div>
+      <section className="pr-overview-band" aria-label="Pull request overview">
+        <div className="pr-overview-metrics">
+          <div className="pr-overview-metric"><FactIcon type="files" /><div><strong>{prDetail.changedFiles ?? prDetail.files?.length ?? 0}</strong><span>Files changed</span></div></div>
+          <div className="pr-overview-metric added"><FactIcon type="add" /><div><strong>+{prDetail.additions ?? 0}</strong><span>Additions</span></div></div>
+          <div className="pr-overview-metric removed"><FactIcon type="remove" /><div><strong>−{prDetail.deletions ?? 0}</strong><span>Deletions</span></div></div>
+          <div className="pr-overview-metric"><FactIcon type="commits" /><div><strong>{prDetail.commitsCount ?? prDetail.commits?.length ?? 0}</strong><span>Commits</span></div></div>
+          <div className="pr-overview-metric"><FactIcon type="conversation" /><div><strong>{(prDetail.commentsCount ?? prDetail.comments?.length ?? 0) + (prDetail.reviewCommentsCount ?? 0)}</strong><span>Conversations</span></div></div>
+        </div>
+        <div className="pr-overview-meta"><span><FactIcon type="clock" /><b>Updated</b>{timeAgo(prDetail.updatedAt)} ago</span><span><FactIcon type="clock" /><b>Created</b>{timeAgo(prDetail.createdAt)} ago</span>{prDetail.mergedAt && <span className="pr-fact-merged"><FactIcon type="merge" /><b>Merged</b>{timeAgo(prDetail.mergedAt)} ago</span>}</div>
+      </section>
 
       {(prDetail.labels?.length || prDetail.approvedBy?.length || prDetail.changesRequestedBy?.length) ? <div className="pr-detail-chips">
         {prDetail.labels?.map((label) => <span key={label} className="pr-detail-chip">{label}</span>)}
@@ -163,12 +187,9 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
         {prDetail.changesRequestedBy?.map((reviewer) => <span key={`changes-${reviewer}`} className="pr-detail-chip danger">! Changes requested by <CopyableValue value={reviewer} /></span>)}
       </div> : null}
 
-      <div className="pr-detail-content-grid">
-      {prDetail.description && <section className="detail-section pr-detail-section pr-description-section"><h2>Description</h2><div className="detail-body">{prDetail.description}</div></section>}
-
       {prDetail.files && prDetail.files.length > 0 && <section className="detail-section pr-detail-section pr-files-section">
-        <div className="pr-section-heading"><h2>Files changed</h2><span>{prDetail.files.length} files</span></div>
-        <div className="pr-file-list">{prDetail.files.map((file) => {
+        <div className="pr-section-heading pr-files-heading"><div><h2>Files changed</h2><span className="pr-files-summary">{visibleFiles.length} of {prDetail.files.length} files · <em>+{prDetail.additions ?? 0}</em> <i>−{prDetail.deletions ?? 0}</i></span></div><label className="pr-file-search"><span aria-hidden="true">⌕</span><input type="search" value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="Search files…" aria-label="Search changed files" />{fileQuery && <button type="button" onClick={() => setFileQuery('')} aria-label="Clear file search">×</button>}</label></div>
+        <div className="pr-file-list">{visibleFiles.map((file) => {
           const expanded = expandedFiles.has(file.path);
             const displayPath = file.previousPath ? `${file.previousPath} → ${file.path}` : file.path;
             return <div className="pr-file-item" key={file.path}>
@@ -178,7 +199,10 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
             </div>{expanded && file.patch && <pre className="pr-file-diff">{renderPatch(file.patch)}</pre>}
           </div>;
         })}</div>
+        {visibleFiles.length === 0 && <div className="pr-file-filter-empty">No changed files match “{fileQuery}”.</div>}
       </section>}
+
+      {prDetail.description && <section className="detail-section pr-detail-section pr-description-section"><div className="pr-section-heading"><h2>Description</h2><span>Context</span></div><div className="detail-body">{prDetail.description}</div></section>}
 
       {prDetail.comments && prDetail.comments.length > 0 && <section className="detail-section pr-detail-section pr-comments-section">
         <div className="pr-section-heading"><h2>Comments</h2><span>{prDetail.comments.length}</span></div>
@@ -193,6 +217,35 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
         <div className="pr-section-heading"><h2>Comments</h2><span>0</span></div>
         <div className="pr-empty-comments"><span>○</span><strong>No comments yet</strong><p>Discussion and review feedback will appear here.</p></div>
       </section>}
+        </main>
+        <aside className="pr-detail-side-rail" aria-label="Pull request overview">
+          <section className="pr-info-card pr-review-card">
+            <h2>Review status</h2>
+            <div className="pr-review-state"><span className="pr-review-state-dot" style={{ background: stateColor(prDetail.state) }} /><strong>{prDetail.state}{prDetail.draft ? ' · draft' : ''}</strong></div>
+            <div className="pr-review-progress"><span style={{ width: `${Math.min(100, ((prDetail.approvedBy?.length ?? 0) / Math.max(1, (prDetail.requestedReviewers?.length ?? 0))) * 100)}%` }} /></div>
+            <div className="pr-review-counts"><span className="pr-info-positive">✓ {prDetail.approvedBy?.length ?? 0} approved</span><span className="pr-info-negative">! {prDetail.changesRequestedBy?.length ?? 0} changes requested</span></div>
+          </section>
+          <section className="pr-info-card">
+            <h2>Reviewers</h2>
+            {reviewers.length ? <div className="pr-person-list">{reviewers.map((reviewer, index) => {
+              const approved = prDetail.approvedBy?.some((name) => name.toLowerCase() === reviewer.toLowerCase());
+              const requestedChanges = prDetail.changesRequestedBy?.some((name) => name.toLowerCase() === reviewer.toLowerCase());
+              return <div className="pr-person-row" key={reviewer}><PersonAvatar name={reviewer} tone={index % 2 ? 'purple' : 'blue'} /><span>{reviewer}</span><span className={`pr-person-status ${approved ? 'approved' : requestedChanges ? 'changes' : 'pending'}`} title={approved ? 'Approved' : requestedChanges ? 'Changes requested' : 'Awaiting review'}>{approved ? '✓' : requestedChanges ? '!' : '○'}</span></div>;
+            })}</div> : <div className="pr-side-empty">No reviewers assigned</div>}
+          </section>
+          <section className="pr-info-card">
+            <h2>Labels</h2>
+            {prDetail.labels?.length ? <div className="pr-label-list">{prDetail.labels.map((label, index) => <span key={label} className={`pr-side-label tone-${index % 3}`}>{label}</span>)}</div> : <div className="pr-side-empty">No labels</div>}
+          </section>
+          <section className="pr-info-card">
+            <h2>Assignees</h2>
+            {prDetail.assignees?.length ? <div className="pr-person-list">{prDetail.assignees.map((assignee) => <div className="pr-person-row" key={assignee}><PersonAvatar name={assignee} tone="green" /><span>{assignee}</span></div>)}</div> : <div className="pr-side-empty">No assignees</div>}
+          </section>
+          <section className="pr-info-card">
+            <h2>Timeline</h2>
+            {timelineEvents.length ? <div className="pr-timeline">{timelineEvents.map((event) => <div className="pr-timeline-item" key={event.id}><span className={`pr-timeline-dot ${event.tone}`} /><div><strong>{event.username}</strong> {event.text}<small>{event.time}</small></div></div>)}</div> : <div className="pr-side-empty">No activity yet</div>}
+          </section>
+        </aside>
       </div>
       {approvalOpen && <div className="pr-search-overlay pr-approval-overlay" role="presentation" onClick={() => !approvalSubmitting && setApprovalOpen(false)}>
         <aside className="pr-search-drawer pr-approval-drawer" role="dialog" aria-modal="true" aria-labelledby="pr-approval-title" onClick={(event) => event.stopPropagation()}>

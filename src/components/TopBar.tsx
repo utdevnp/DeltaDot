@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { SPINNER } from '../../core/utils.js';
 import { timeAgo } from '../../core/utils.js';
 import type { ThemeMode, Workspace } from '../../core/types.js';
@@ -27,8 +27,23 @@ function folderName(p: string): string {
 }
 
 export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, onEditWorkspace, onOpenConfig, workspaces, activeWorkspaceId, onSwitchWorkspace, onAddWorkspace, theme, onToggleTheme }: TopBarProps) {
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [appInfo, setAppInfo] = useState<{ version: string; name: string } | null>(null);
   const frame = Math.floor(Date.now() / 120) % SPINNER.length;
   const spinner = SPINNER[frame] ?? '?';
+
+  useEffect(() => {
+    window.api.getAppInfo().then(setAppInfo).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!aboutOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAboutOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [aboutOpen]);
 
   return (
     <div className="top-bar">
@@ -106,9 +121,11 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
             </svg>
           )}
         </span>
-        <span
+        <button
+          type="button"
           onClick={onOpenConfig}
           className="icon-action"
+          aria-label="Settings"
           style={{
             marginLeft: 4,
             padding: '4px 7px',
@@ -127,8 +144,56 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
-        </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setAboutOpen(true)}
+          className="icon-action"
+          aria-label="About DeltaDot"
+          title="About DeltaDot"
+          style={{
+            marginLeft: 4,
+            padding: '4px 7px',
+            borderRadius: 4,
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            lineHeight: 1,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v5" />
+            <path d="M12 8h.01" />
+          </svg>
+        </button>
       </div>
+      {aboutOpen && (
+        <>
+          <button type="button" className="about-drawer-backdrop" aria-label="Close About drawer" onClick={() => setAboutOpen(false)} />
+          <aside className="about-drawer" aria-label="About DeltaDot">
+            <div className="about-drawer-header">
+              <div>
+                <div className="about-drawer-eyebrow">About</div>
+                <h2>DeltaDot</h2>
+              </div>
+              <button type="button" className="about-drawer-close" onClick={() => setAboutOpen(false)} aria-label="Close About drawer">×</button>
+            </div>
+            <div className="about-drawer-body">
+              <div className="about-app-mark" aria-hidden="true"><span className="dot" /></div>
+              <p className="about-description">Git workspace sync checker for comparing branches, reviewing pull requests, and keeping repository status in one place.</p>
+              <div className="about-detail-row"><span>Version</span><strong>{appInfo?.version ? `v${appInfo.version.replace(/^v/, '')}` : 'Loading…'}</strong></div>
+              <div className="about-detail-row"><span>Developer</span><strong>Ut Dev</strong></div>
+              <div className="about-detail-row"><span>Role</span><strong>Web Developer</strong></div>
+              <div className="about-detail-row"><span>Product</span><strong>DeltaDot</strong></div>
+              <button type="button" className="about-profile-link" onClick={() => window.api.openUrl('https://github.com/utdevnp')}>View GitHub profile ↗</button>
+            </div>
+          </aside>
+        </>
+      )}
     </div>
   );
 }

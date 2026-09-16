@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type { View } from '../../core/types.js';
 
 interface BottomBarProps {
@@ -75,6 +75,12 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
 };
 
 export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    window.api.getAppInfo().then(({ version: appVersion }) => setVersion(`v${appVersion.replace(/^v/, '')}`)).catch(() => undefined);
+  }, []);
+
   let keys = KEYBINDINGS[currentView] ?? [];
   if (currentView === 'k8s') {
     const common = [
@@ -104,6 +110,7 @@ export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
           </span>
         </React.Fragment>
       ))}
+      <span className="bottom-bar-version">DeltaDot {version || 'v1.1.1'}</span>
     </div>
   );
 }
