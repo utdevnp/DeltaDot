@@ -14,20 +14,24 @@ export function run(cmd: string, cwd: string): Promise<string> {
 function parseOneline(logOutput: string): CommitEntry[] {
   if (!logOutput) return [];
   return logOutput.split('\n').map((line) => {
-    const idx = line.indexOf(' ');
-    return { hash: idx !== -1 ? line.slice(0, idx) : line, message: idx !== -1 ? line.slice(idx + 1) : '' };
+    const [hash = '', message = '', author = '', age = '', date = ''] = line.split('|||');
+    return { hash, message, author: author ? toUsername(author) : '', age, date };
   });
 }
 
 async function fetchLatestCommits(repoPath: string, release: string): Promise<LatestCommit[]> {
   try {
-    const out = await run(`git log -5 origin/${release} --format="%h|||%s|||%ae|||%ar"`, repoPath);
+    const out = await run(`git log -5 origin/${release} --format="%h|||%s|||%ae|||%ar|||%cI"`, repoPath);
     if (!out) return [];
     return out.split('\n').map((line) => {
-      const [hash = '', subject = '', author = '', age = ''] = line.split('|||');
-      return { hash, subject, author: toUsername(author), age };
+      const [hash = '', subject = '', author = '', age = '', date = ''] = line.split('|||');
+      return { hash, subject, author: toUsername(author), age, date };
     });
   } catch { return []; }
+}
+
+export async function fetchBranchCommits(repoPath: string, branch: string): Promise<LatestCommit[]> {
+  return fetchLatestCommits(repoPath, branch);
 }
 
 async function getLatestTag(repoPath: string, base: string): Promise<{ tag: string | null; date: string | null }> {
@@ -51,16 +55,17 @@ export async function analyzeRepo(repoPath: string, base: string, release: strin
   const name = repoPath.split('/').pop() ?? repoPath;
   try {
     await run('git fetch --all --quiet', repoPath);
-    const logOut = await run(`git log origin/${base}..origin/${release} --oneline`, repoPath);
+    const logOut = await run(`git log origin/${base}..origin/${release} --format="%h|||%s|||%ae|||%ar|||%cI"`, repoPath);
     const diffCommits = parseOneline(logOut);
     const latestCommits = await fetchLatestCommits(repoPath, release);
+    const baseCommits = await fetchLatestCommits(repoPath, base);
     const { tag: latestVersion, date: latestVersionDate } = await getLatestTag(repoPath, base);
     const currentBranch = await getCurrentBranch(repoPath);
     const first = latestCommits[0];
     return {
       name, path: repoPath,
       status: diffCommits.length === 0 ? 'synced' : 'behind',
-      diffCommits, latestCommits,
+      diffCommits, latestCommits, baseCommits,
       latestVersion, latestVersionDate, currentBranch,
       lastCommitMsg: first?.subject ?? '',
       lastCommitAge: first?.age ?? '',
@@ -73,7 +78,7 @@ export async function analyzeRepo(repoPath: string, base: string, release: strin
     const trimmed = msg.trim();
     const missingBranchPattern = /(couldn'?t find remote ref|could not find remote ref|couldn'?t find|ambiguous argument|bad revision|unknown revision|no such ref|does not have any commits yet)/i;
     if (missingBranchPattern.test(trimmed) && trimmed.includes(`origin/${release}`)) {
-      return { name, path: repoPath, status: 'synced', diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null, missingRelease: true };
+      return { name, path: repoPath, status: 'synced', diffCommits: [], latestCommits: [], baseCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null, missingRelease: true };
     }
     return { name, path: repoPath, status: 'error', diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: trimmed };
   }

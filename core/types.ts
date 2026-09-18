@@ -26,6 +26,7 @@ export interface AppConfig {
   workspace: string;
   base: string;
   release: string;
+  releaseStartDate?: string;
   syncInterval: number;
   token: string;
   provider: Provider;
@@ -46,6 +47,9 @@ export interface AppConfig {
 export interface CommitEntry {
   hash: string;
   message: string;
+  author?: string;
+  age?: string;
+  date?: string;
 }
 
 export interface LatestCommit {
@@ -53,6 +57,7 @@ export interface LatestCommit {
   subject: string;
   author: string;
   age: string;
+  date?: string;
 }
 
 export interface CommitDetail {
@@ -80,6 +85,7 @@ export interface RepoState {
   status: RepoStatus;
   diffCommits: CommitEntry[];
   latestCommits: LatestCommit[];
+  baseCommits?: LatestCommit[];
   lastCommitMsg: string;
   lastCommitAge: string;
   lastCommitAuthor: string;
@@ -196,12 +202,12 @@ export interface JiraIssue {
   url: string;
 }
 
-export type ConfigField = 'workspace' | 'base' | 'release' | 'syncInterval' | 'token' | 'provider' | 'taskProvider' | 'jiraUrl' | 'jiraEmail' | 'jiraApiToken' | 'aiProvider' | 'aiApiKey' | 'aiApiUrl' | 'aiModel' | 'aiSystemPrompt' | 'theme';
+export type ConfigField = 'workspace' | 'base' | 'release' | 'releaseStartDate' | 'syncInterval' | 'token' | 'provider' | 'taskProvider' | 'jiraUrl' | 'jiraEmail' | 'jiraApiToken' | 'aiProvider' | 'aiApiKey' | 'aiApiUrl' | 'aiModel' | 'aiSystemPrompt' | 'theme';
 
-export const CONFIG_FIELDS: ConfigField[] = ['workspace', 'base', 'release', 'syncInterval', 'token', 'provider', 'taskProvider', 'jiraUrl', 'jiraEmail', 'jiraApiToken', 'aiProvider', 'aiApiKey', 'aiApiUrl', 'aiModel', 'aiSystemPrompt', 'theme'];
+export const CONFIG_FIELDS: ConfigField[] = ['workspace', 'base', 'release', 'releaseStartDate', 'syncInterval', 'token', 'provider', 'taskProvider', 'jiraUrl', 'jiraEmail', 'jiraApiToken', 'aiProvider', 'aiApiKey', 'aiApiUrl', 'aiModel', 'aiSystemPrompt', 'theme'];
 
 export function getVisibleConfigFields(taskProvider: TaskProvider, aiProvider: string): ConfigField[] {
-  const fields: ConfigField[] = ['workspace', 'base', 'release', 'syncInterval', 'token', 'provider', 'taskProvider'];
+  const fields: ConfigField[] = ['workspace', 'base', 'release', 'releaseStartDate', 'syncInterval', 'token', 'provider', 'taskProvider'];
   if (taskProvider === 'jira') {
     fields.push('jiraUrl', 'jiraEmail', 'jiraApiToken');
   }
@@ -216,6 +222,7 @@ export const CONFIG_LABELS: Record<ConfigField, string> = {
   workspace:    'Workspace Path',
   base:         'Base Branch',
   release:      'Release Branch',
+  releaseStartDate: 'Release Start Date',
   syncInterval: 'Sync Interval (min)',
   token:        'API Token',
   provider:     'Provider',
@@ -385,6 +392,7 @@ export interface KubeContextTab {
   kind: string; // selected resource kind id (deployments, pods, configmaps, …)
   resources: KubeResourceList; // table for the selected kind in the current namespace
   podFilters: string[]; // pods only: subset of owner kinds, combinable
+  podAgeFilter: string; // pods only: age preset key, e.g. '10m' or 'older'
   watch: boolean; // live watch mode: poll the current resource table
   watchInterval: number; // seconds between polls (default 1)
   selected: number;

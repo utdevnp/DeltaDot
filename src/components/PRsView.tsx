@@ -35,6 +35,7 @@ interface PRsViewProps {
   onLoadMore: () => void;
   searchState?: PRSearchViewState;
   onSearchStateChange?: (state: PRSearchViewState) => void;
+  autoSearchQuery?: string;
 }
 
 function FilterTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -64,7 +65,7 @@ function relativeDate(iso?: string): string {
   return value === 'now' ? 'just now' : value.replace(/^(\d+)([smhdw]|mo|y)$/, (_, amount, unit) => `${amount} ${({ s: 'second', m: 'minute', h: 'hour', d: 'day', w: 'week', mo: 'month', y: 'year' } as Record<string, string>)[unit]}${amount === '1' ? '' : 's'} ago`);
 }
 
-export function PRsView({ prs, loading, error, selected, filter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onSearch, onReviewSearchResult, hasMore, onLoadMore, searchState, onSearchStateChange }: PRsViewProps) {
+export function PRsView({ prs, loading, error, selected, filter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onSearch, onReviewSearchResult, hasMore, onLoadMore, searchState, onSearchStateChange, autoSearchQuery }: PRsViewProps) {
   const [searchQuery, setSearchQuery] = React.useState(() => searchState?.query ?? '');
   const [searching, setSearching] = React.useState(false);
   const [searchError, setSearchError] = React.useState('');
@@ -107,6 +108,11 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
       setSearching(false);
     }
   };
+
+  React.useEffect(() => {
+    if (!autoSearchQuery || searchResult || searching || searchQuery.trim() !== autoSearchQuery.trim()) return;
+    void submitSearch({ preventDefault: () => {} } as React.FormEvent);
+  }, [autoSearchQuery]);
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>

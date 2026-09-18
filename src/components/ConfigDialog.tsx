@@ -26,7 +26,7 @@ const TABS: { id: ConfigTab; label: string }[] = [
 ];
 
 const TAB_FIELDS: Record<ConfigTab, ConfigField[]> = {
-  workspace: ['workspace', 'base', 'release', 'syncInterval'],
+  workspace: ['workspace', 'base', 'release', 'releaseStartDate', 'syncInterval'],
   git: ['provider', 'token'],
   jira: ['taskProvider', 'jiraUrl', 'jiraEmail', 'jiraApiToken'],
   ai: ['aiProvider', 'aiApiKey', 'aiApiUrl', 'aiModel', 'aiSystemPrompt'],
@@ -505,7 +505,7 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, fullP
                   ) : (
                     <div style={{ position: 'relative' }}>
                       <input
-                        type={isSensitive && !visibleFields.has(field) ? 'password' : 'text'}
+                        type={field === 'releaseStartDate' ? 'date' : isSensitive && !visibleFields.has(field) ? 'password' : 'text'}
                         value={value}
                         onChange={(e) => handleChange(field, e.target.value)}
                         placeholder={placeholder}

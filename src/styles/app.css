@@ -1539,7 +1539,12 @@ select:focus-visible {
 .repo-inspector-content { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .repo-inspector-embedded { flex: 1 1 auto !important; min-height: 0; border: 0; box-shadow: none; }
 .repo-inspector-embedded > .repo-pr-inspector-resize-handle, .repo-inspector-embedded > .repo-pr-inspector-tabbar { display: none; }
+.repo-commit-inspector > .repo-pr-inspector-tabbar { display: none; }
+.repo-inspector-content > .repo-commit-inspector { flex: 1 1 auto; width: 100%; min-width: 0; }
+.repo-commit-inspector .repo-pr-inspector-tabs { display: none; }
+.repo-commit-inspector .repo-pr-inspector-actions { pointer-events: auto; }
 .repo-pr-inspector-tabbar { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 4px 14px; overflow: hidden; background: color-mix(in srgb, var(--bg-primary) 82%, var(--accent-blue) 18%); }
+.repo-inspector-unified > .repo-pr-inspector-tabbar { overflow: visible; }
 .repo-pr-inspector-tabs { display: flex; min-width: 0; gap: 5px; overflow-x: auto; }
 .repo-pr-inspector-tabbar button { display: inline-flex; align-items: center; gap: 8px; max-width: 220px; padding: 7px 10px 7px 12px; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: 7px 7px 0 0; background: transparent; color: var(--text-secondary); cursor: pointer; font: 11px var(--font-sans); white-space: nowrap; }
 .repo-pr-inspector-tabbar button:hover { background: var(--tint-blue); color: var(--text-primary); }
@@ -1550,6 +1555,44 @@ select:focus-visible {
 .repo-pr-inspector-actions { display: flex; align-items: center; gap: 4px; height: 29px; margin-left: auto; }
 .repo-pr-filter, .repo-pr-refresh { box-sizing: border-box; height: 29px; padding: 0 8px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--text-dim); cursor: pointer; font: 11px var(--font-sans); }
 .repo-pr-filter:hover, .repo-pr-filter.is-active { border-color: var(--border-blue); background: var(--tint-blue); color: var(--accent-blue); }
+.commit-author-filter { position: relative; height: 29px; }
+.commit-view-filters { display: flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-tertiary); }
+.commit-view-filters .repo-pr-filter { border-color: transparent; background: transparent; }
+.commit-view-filters .commit-author-filter summary { border-color: transparent; }
+.commit-date-filter { display: inline-flex; align-items: center; gap: 4px; height: 29px; padding: 0 6px; color: var(--text-dim); font: 10px var(--font-sans); white-space: nowrap; }
+.commit-date-filter input { width: 112px; height: 24px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); font: 11px var(--font-sans); }
+.commit-date-filter input:focus { outline: none; border-color: var(--border-blue); box-shadow: 0 0 0 2px var(--tint-blue); }
+.commit-date-range-filter { position: relative; height: 29px; }
+.commit-date-range-filter summary { display: inline-flex; align-items: center; gap: 5px; height: 29px; padding: 0 7px; border: 1px solid transparent; border-radius: 5px; color: var(--text-dim); cursor: pointer; font: 11px var(--font-sans); list-style: none; white-space: nowrap; }
+.commit-date-range-filter summary::-webkit-details-marker { display: none; }
+.commit-date-range-filter summary:hover, .commit-date-range-filter[open] summary { border-color: var(--border-blue); background: var(--tint-blue); color: var(--accent-blue); }
+.commit-date-range-filter summary span { font-size: 15px; line-height: 1; }
+.commit-date-range-filter summary svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.commit-date-range-filter summary em { color: var(--text-primary); font-size: 10px; font-style: normal; }
+.commit-reset-filter { height: 29px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; font: 11px var(--font-sans); }
+.commit-reset-filter:hover { border-color: var(--border-blue); background: var(--tint-blue); color: var(--accent-blue); }
+.commit-date-range-menu { position: absolute; top: 33px; right: 0; z-index: 11; width: 236px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-secondary); box-shadow: var(--shadow-pop); }
+.calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; color: var(--text-primary); font-size: 12px; }
+.calendar-header button { width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 18px; }
+.calendar-header button:hover { background: var(--tint-blue); color: var(--accent-blue); }
+.calendar-weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; text-align: center; }
+.calendar-weekdays { margin-bottom: 3px; color: var(--text-dim); font: 10px var(--font-mono); }
+.calendar-grid button, .calendar-empty { display: grid; place-items: center; width: 27px; height: 27px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; font: 11px var(--font-sans); }
+.calendar-grid button:hover, .calendar-grid button.is-in-range { background: var(--tint-blue); color: var(--accent-blue); }
+.calendar-grid button.is-selected { background: var(--accent-blue); color: #fff; font-weight: 650; }
+.calendar-range-label { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border); color: var(--text-dim); font: 10px var(--font-mono); }
+.calendar-clear { width: 100%; margin-top: 8px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; font: 11px var(--font-sans); }
+.calendar-clear:hover { border-color: var(--border-red); background: var(--tint-red); color: var(--accent-red); }
+.commit-date-range-menu label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-secondary); font: 11px var(--font-sans); }
+.commit-date-range-menu input { width: 125px; height: 25px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary); font: 11px var(--font-sans); }
+.commit-date-range-menu input:focus { outline: none; border-color: var(--border-blue); box-shadow: 0 0 0 2px var(--tint-blue); }
+.commit-author-filter summary { box-sizing: border-box; height: 29px; padding: 7px 8px; border: 1px solid transparent; border-radius: 5px; color: var(--text-dim); cursor: pointer; font: 11px var(--font-sans); list-style: none; white-space: nowrap; }
+.commit-author-filter summary::-webkit-details-marker { display: none; }
+.commit-author-filter summary:hover, .commit-author-filter[open] summary { border-color: var(--border-blue); background: var(--tint-blue); color: var(--accent-blue); }
+.commit-author-menu { position: absolute; top: 33px; right: 0; z-index: 10; min-width: 160px; max-height: 220px; overflow-y: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-secondary); box-shadow: var(--shadow-pop); }
+.commit-author-menu label { display: flex; align-items: center; gap: 6px; padding: 5px 6px; color: var(--text-primary); cursor: pointer; font: 11px var(--font-sans); white-space: nowrap; }
+.commit-author-menu label:hover { background: var(--tint-blue); }
+.commit-author-menu input { accent-color: var(--accent-blue); }
 .repo-pr-refresh { display: inline-grid; place-items: center; width: 29px; margin-left: 4px; padding: 0; font-size: 17px; line-height: 1; }
 .repo-pr-refresh:disabled { cursor: wait; opacity: .55; }
 .repo-pr-search { display: flex; align-items: center; gap: 5px; box-sizing: border-box; flex: 0 0 180px; height: 29px; margin-left: 0; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-dim); }
@@ -1588,6 +1631,14 @@ select:focus-visible {
 .k8s-search-box input::placeholder { color: var(--text-dim); }
 .k8s-search-box button { width: 22px; height: 22px; margin: 0 3px 0 0 !important; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-dim); cursor: pointer; font: 16px/1 var(--font-sans); }
 .k8s-search-box button:hover { background: var(--tint-blue); color: var(--text-primary); }
+.k8s-age-filter { display: inline-flex; align-items: center; height: 30px; box-sizing: border-box; padding: 0 7px; gap: 5px; border: 1px solid var(--border); border-radius: 7px; background: linear-gradient(135deg, var(--bg-tertiary), color-mix(in srgb, var(--tint-blue) 42%, var(--bg-tertiary))); color: var(--text-secondary); transition: border-color .15s, box-shadow .15s, background .15s; }
+.k8s-age-filter:focus-within, .k8s-age-filter:hover { border-color: var(--border-blue); box-shadow: 0 0 0 2px var(--tint-blue); }
+.k8s-age-filter-icon { color: var(--accent-cyan); font-size: 16px; line-height: 1; }
+.k8s-age-filter-label { color: var(--text-dim); font: 650 10px var(--font-sans); letter-spacing: .04em; text-transform: uppercase; }
+.k8s-age-filter-select-wrap { position: relative; display: inline-flex; align-items: center; min-width: 106px; }
+.k8s-age-filter-select { width: 100%; height: 26px; padding: 0 17px 0 2px; border: 0; outline: 0; appearance: none; background: transparent; color: var(--text-primary); cursor: pointer; font: 600 11px var(--font-sans); }
+.k8s-age-filter-select option { background: var(--bg-secondary); color: var(--text-primary); font-weight: 500; }
+.k8s-age-filter-chevron { position: absolute; right: 1px; top: 50%; transform: translateY(-58%); color: var(--accent-blue); pointer-events: none; font-size: 15px; line-height: 1; }
 .k8s-resource-tab { transition: background .15s, border-color .15s, color .15s, transform .15s, box-shadow .15s; }
 .k8s-resource-tab:hover { transform: translateY(-1px); border-color: var(--border-blue) !important; color: var(--text-primary) !important; }
 .k8s-resource-tab.is-active { box-shadow: 0 4px 12px color-mix(in srgb, var(--glow-blue) 24%, transparent); }

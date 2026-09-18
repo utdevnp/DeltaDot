@@ -21,7 +21,7 @@ import { AppNav } from './components/AppNav';
 import { AddWorkspaceDialog } from './components/AddWorkspaceDialog';
 import { CloneDialog } from './components/CloneDialog';
 import { RepoPRInspector, type RepoPRInspectorTab } from './components/RepoPRInspector';
-import { RepoCommitInspector, type RepoCommitInspectorTab } from './components/RepoCommitInspector';
+import { CommitFilterControls, RepoCommitInspector, type RepoCommitInspectorTab } from './components/RepoCommitInspector';
 import { RepoInspector, type RepoInspectorTab } from './components/RepoInspector';
 
 const PR_PAGE_SIZE = 10;
@@ -173,10 +173,17 @@ export function App() {
   const [prDetailLoading, setPRDetailLoading] = useState(false);
   const [prDetailError, setPRDetailError] = useState('');
   const [prSearchState, setPRSearchState] = useState<PRSearchViewState>({ query: '', result: null, selectedPR: 0, selectedPRs: new Set() });
+  const [autoPRSearchQuery, setAutoPRSearchQuery] = useState('');
   const [repoPRTabs, setRepoPRTabs] = useState<RepoPRInspectorTab[]>([]);
   const [activeRepoPRTab, setActiveRepoPRTab] = useState('');
   const [repoCommitTabs, setRepoCommitTabs] = useState<RepoCommitInspectorTab[]>([]);
   const [activeRepoCommitTab, setActiveRepoCommitTab] = useState('');
+  const [commitBranchFilter, setCommitBranchFilter] = useState<'all' | 'release' | 'base'>('all');
+  const [commitAuthorFilters, setCommitAuthorFilters] = useState<string[]>([]);
+  const [commitDateFrom, setCommitDateFrom] = useState('');
+  const [commitDateTo, setCommitDateTo] = useState('');
+  useEffect(() => { setCommitAuthorFilters([]); }, [commitBranchFilter]);
+  useEffect(() => { setCommitDateFrom(cfg?.releaseStartDate ?? ''); setCommitDateTo(''); }, [cfg?.releaseStartDate]);
   const [activeRepoInspectorTab, setActiveRepoInspectorTab] = useState('');
   const [openPRCounts, setOpenPRCounts] = useState<Record<string, number | string | null>>({});
 
@@ -871,7 +878,12 @@ export function App() {
     setRepoCommitTabs((previous) => previous.some((tab) => tab.id === repo.path) ? previous : [...previous, { id: repo.path, repo, selected: 0 }]);
     setActiveRepoCommitTab(repo.path);
     setActiveRepoInspectorTab(`commit:${repo.path}`);
-  }, []);
+    if (cfg) {
+      void Promise.all([window.api.fetchBranchCommits(repo.path, cfg.base), window.api.fetchBranchCommits(repo.path, cfg.release)]).then(([baseCommits, latestCommits]) => {
+        setRepoCommitTabs((previous) => previous.map((tab) => tab.id === repo.path ? { ...tab, repo: { ...tab.repo, baseCommits, latestCommits } } : tab));
+      });
+    }
+  }, [cfg]);
 
   const fetchAllPRs = useCallback(async (filterOverride?: 'open' | 'closed' | 'all', reposOverride?: RepoState[]) => {
     const currentCfg = cfgRef.current;
@@ -1141,7 +1153,7 @@ export function App() {
     const tab: KubeContextTab = {
       id: ctxName, context: ctxName, namespace: defaultNs, namespaces: [],
       kind: 'pods', resources: { kind: 'pods', columns: [], items: [] },
-      podFilters: ['ReplicaSet'], watch: false, watchInterval: 1,
+      podFilters: ['ReplicaSet'], podAgeFilter: 'all', watch: false, watchInterval: 1,
       selected: 0, loading: true, error: '',
     };
     setKubeContextTabs((prev) => [...prev, tab]);
@@ -1249,6 +1261,12 @@ export function App() {
       ...t,
       podFilters: t.podFilters.includes(category) ? t.podFilters.filter((c) => c !== category) : [...t.podFilters, category],
       selected: 0,
+    } : t));
+  }, []);
+
+  const handleKubeTabPodAgeFilterChange = useCallback((tabId: string, ageFilter: string) => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
+      ...t, podAgeFilter: ageFilter, selected: 0,
     } : t));
   }, []);
 
@@ -1958,6 +1976,10 @@ export function App() {
               } else if (repos[selectedRepo].status === 'loading' || repos[selectedRepo].status === 'syncing') {
                 showStatusRef.current('Repo still loading. Wait for sync to finish.', true);
               } else {
+                const repo = repos[selectedRepo];
+                void Promise.all([window.api.fetchBranchCommits(repo.path, cfg.base), window.api.fetchBranchCommits(repo.path, cfg.release)]).then(([baseCommits, latestCommits]) => {
+                  setRepos((previous) => previous.map((item) => item.path === repo.path ? { ...item, baseCommits, latestCommits } : item));
+                });
                 setView('commits');
                 setSelectedCommit(0);
               }
@@ -2555,6 +2577,13 @@ export function App() {
                   else if (repoPRTabs[0]) setActiveRepoPRTab(repoPRTabs[0].id);
                 }
               }}
+              headerActions={activeRepoInspectorTab === `commit:${activeRepoCommitTab}` ? (() => {
+                const tab = repoCommitTabs.find((item) => item.id === activeRepoCommitTab);
+                const releaseCommits = [...(tab?.repo.latestCommits ?? []), ...(tab?.repo.diffCommits ?? [])];
+                const commits = commitBranchFilter === 'base' ? (tab?.repo.baseCommits ?? []) : commitBranchFilter === 'release' ? releaseCommits : [...releaseCommits, ...(tab?.repo.baseCommits ?? [])];
+                const authors = Array.from(new Set(commits.map((commit) => commit.author).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+                return <><CommitFilterControls branchFilter={commitBranchFilter} authorFilters={commitAuthorFilters} authors={authors} baseBranch={cfg.base} releaseBranch={cfg.release} dateFrom={commitDateFrom} dateTo={commitDateTo} onBranchFilterChange={(value) => { setCommitBranchFilter(value); setCommitAuthorFilters([]); }} onAuthorFilterChange={setCommitAuthorFilters} onDateFromChange={setCommitDateFrom} onDateToChange={setCommitDateTo} /><button type="button" className="commit-reset-filter" onClick={() => { setCommitBranchFilter('all'); setCommitAuthorFilters([]); setCommitDateFrom(cfg.releaseStartDate ?? ''); setCommitDateTo(''); }}>Reset</button></>;
+              })() : null}
             >
           {repoPRTabs.length > 0 && activeRepoInspectorTab === `pr:${activeRepoPRTab}` && (
             <RepoPRInspector
@@ -2620,6 +2649,14 @@ export function App() {
                 window.api.fetchCommitDetail(tab.repo.path, hash).then(setDetail);
                 setView('detail');
               }}
+              branchFilter={commitBranchFilter}
+              authorFilters={commitAuthorFilters}
+              onBranchFilterChange={(value) => { setCommitBranchFilter(value); setCommitAuthorFilters([]); }}
+              onAuthorFilterChange={setCommitAuthorFilters}
+              dateFrom={commitDateFrom}
+              dateTo={commitDateTo}
+              onDateFromChange={setCommitDateFrom}
+              onDateToChange={setCommitDateTo}
               embedded
             />
           )}
@@ -2631,11 +2668,12 @@ export function App() {
         const repo = repos[selectedRepo];
         if (!repo) return <div className="state-message">No repo selected</div>;
         return (
-          <CommitsView
+              <CommitsView
             repo={repo}
             selectedCommit={selectedCommit}
             base={cfg.base}
-            release={cfg.release}
+                release={cfg.release}
+                releaseStartDate={cfg.releaseStartDate}
             onSelectCommit={setSelectedCommit}
             onBack={() => setView('list')}
             onCommitDetail={(hash: string) => {
@@ -2662,6 +2700,7 @@ export function App() {
               : Boolean(repos[selectedRepo] && prPagination[repos[selectedRepo]!.path]?.hasMore)}
             onLoadMore={loadMorePRs}
             searchState={prSearchState}
+            autoSearchQuery={autoPRSearchQuery}
             onSearchStateChange={setPRSearchState}
             onSelect={setSelectedPR}
             onBack={() => setView('list')}
@@ -2737,6 +2776,20 @@ export function App() {
               } catch { /* Fall back to the repository's configured remote. */ }
               await window.api.approvePR(owner, repo, prDetail.number, cfg.provider, cfg.token, comment);
             }}
+            onFindRelatedPRs={async () => {
+              const jiraConfig = cfg ? { url: cfg.jiraUrl, email: cfg.jiraEmail, apiToken: cfg.jiraApiToken } : null;
+              if (!jiraConfig?.url || !jiraConfig.email || !jiraConfig.apiToken) {
+                throw new Error('Jira is not configured. Press e to open settings and configure Jira.');
+              }
+              const key = await window.api.extractJiraKey(prDetail.title, prDetail.description, prDetail.sourceBranch);
+              if (!key) throw new Error('No Jira ticket key was found in this PR title, description, or branch.');
+              setPRSearchState({ query: key, result: null, selectedPR: 0, selectedPRs: new Set() });
+              setAutoPRSearchQuery(key);
+              setPRDetail(null);
+              setPRDetailError('');
+              setPRDetailLoading(false);
+              setView('prs');
+            }}
             onReview={() => {
               const prRepo = prDetail.repoName ? repos.find((r) => r.name === prDetail.repoName) : null;
               setReviewContext({
@@ -2799,6 +2852,7 @@ export function App() {
             onTabNamespaceChange={handleKubeTabNamespaceChange}
             onTabKindChange={handleKubeTabKindChange}
             onTabPodFilterToggle={handleKubeTabPodFilterToggle}
+            onTabPodAgeFilterChange={handleKubeTabPodAgeFilterChange}
             onTabWatchToggle={handleKubeTabWatchToggle}
             onTabWatchInterval={handleKubeTabWatchInterval}
             onRefreshTab={refreshKubeTab}

@@ -15,6 +15,7 @@ export interface DeltaDotAPI {
   syncOneRepo: (repoPath: string, base: string, release: string) => Promise<RepoState>;
   syncAllRepos: (repoPaths: string[], base: string, release: string) => Promise<RepoState[]>;
   fetchCommitDetail: (repoPath: string, hash: string) => Promise<CommitDetail>;
+  fetchBranchCommits: (repoPath: string, branch: string) => Promise<import('../core/types.js').LatestCommit[]>;
   getRemoteUrl: (repoPath: string) => Promise<string>;
   getRemoteOwnerRepo: (repoPath: string) => Promise<{ owner: string; repo: string } | null>;
   fetchPRs: (owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number) => Promise<PRPage>;
@@ -81,6 +82,7 @@ const api: DeltaDotAPI = {
   syncOneRepo: (repoPath, base, release) => ipcRenderer.invoke('sync-one-repo', repoPath, base, release),
   syncAllRepos: (repoPaths, base, release) => ipcRenderer.invoke('sync-all-repos', repoPaths, base, release),
   fetchCommitDetail: (repoPath, hash) => ipcRenderer.invoke('fetch-commit-detail', repoPath, hash),
+  fetchBranchCommits: (repoPath, branch) => ipcRenderer.invoke('fetch-branch-commits', repoPath, branch),
   getRemoteUrl: (repoPath) => ipcRenderer.invoke('get-remote-url', repoPath),
   getRemoteOwnerRepo: (repoPath) => ipcRenderer.invoke('get-remote-owner-repo', repoPath),
   fetchPRs: (owner, repo, provider, token, repoName, state, page, pageSize) => ipcRenderer.invoke('fetch-prs', owner, repo, provider, token, repoName, state, page, pageSize),

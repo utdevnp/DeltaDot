@@ -149,6 +149,7 @@ export function resolveCliConfig(cliOpts: { path?: string; base?: string; releas
     workspace:    resolve(cliOpts.path ?? savedCfg.workspace ?? '.'),
     base:         cliOpts.base         ?? savedCfg.base         ?? 'main',
     release:      cliOpts.release      ?? savedCfg.release      ?? 'R10',
+    releaseStartDate: savedCfg.releaseStartDate ?? '',
     syncInterval: cliOpts.syncInterval ? parseFloat(cliOpts.syncInterval)
                                         : (savedCfg.syncInterval ?? 30),
     token:        cliOpts.token        ?? savedCfg.token        ?? '',

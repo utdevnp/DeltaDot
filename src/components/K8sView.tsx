@@ -24,6 +24,7 @@ interface K8sViewProps {
   onTabNamespaceChange: (tabId: string, ns: string) => void;
   onTabKindChange: (tabId: string, kind: string) => void;
   onTabPodFilterToggle: (tabId: string, category: string) => void;
+  onTabPodAgeFilterChange: (tabId: string, ageFilter: string) => void;
   onTabWatchToggle: (tabId: string, enabled: boolean) => void;
   onTabWatchInterval: (tabId: string, seconds: number) => void;
   onRefreshTab: (tabId: string) => void;
@@ -172,11 +173,26 @@ function ResourceMenuItem({ label, icon, onClick, danger = false }: { label: str
   );
 }
 
-function ContextTabControls({ tab, searchQuery, onSearchQueryChange, onPodFilterToggle, onWatchToggle, onWatchInterval, onRefresh }: {
+const POD_AGE_FILTERS = [
+  { value: 'all', label: 'All ages' },
+  { value: '10m', label: '10 min' },
+  { value: '30m', label: '30 min' },
+  { value: '1h', label: '1 hr' },
+  { value: '6h', label: '6 hr' },
+  { value: 'today', label: 'Today' },
+  { value: '3d', label: '3 days' },
+  { value: '5d', label: '5 days' },
+  { value: '15d', label: '15 days' },
+  { value: '1mo', label: '1 month' },
+  { value: 'older', label: 'Older than 1 month' },
+] as const;
+
+function ContextTabControls({ tab, searchQuery, onSearchQueryChange, onPodFilterToggle, onPodAgeFilterChange, onWatchToggle, onWatchInterval, onRefresh }: {
   tab: KubeContextTab;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
   onPodFilterToggle: (tabId: string, category: string) => void;
+  onPodAgeFilterChange: (tabId: string, ageFilter: string) => void;
   onWatchToggle: (tabId: string, enabled: boolean) => void;
   onWatchInterval: (tabId: string, seconds: number) => void;
   onRefresh: (tabId: string) => void;
@@ -198,7 +214,21 @@ function ContextTabControls({ tab, searchQuery, onSearchQueryChange, onPodFilter
         />
         {searchQuery && <button type="button" onClick={() => onSearchQueryChange('')} aria-label="Clear resource search" title="Clear search">×</button>}
       </div>
-      {showPodFilter && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>filter</span>}
+      {showPodFilter && <div className="k8s-age-filter" title="Filter pods by age">
+        <span className="k8s-age-filter-icon" aria-hidden="true">◷</span>
+        <span className="k8s-age-filter-label">Age</span>
+        <span className="k8s-age-filter-select-wrap">
+          <select
+            className="k8s-age-filter-select"
+            value={tab.podAgeFilter ?? 'all'}
+            onChange={(e) => onPodAgeFilterChange(tab.id, e.target.value)}
+            aria-label="Filter pods by age"
+          >
+            {POD_AGE_FILTERS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <span className="k8s-age-filter-chevron" aria-hidden="true">⌄</span>
+        </span>
+      </div>}
       {showPodFilter && ownerKinds.map((kind) => {
         const active = filters.includes(kind);
         return (
@@ -239,11 +269,37 @@ function ContextTabControls({ tab, searchQuery, onSearchQueryChange, onPodFilter
   );
 }
 
-function TabBar({ activeTab, contextTabs, workloadTabs, compareTab, activeContextTab, searchQuery, onSearchQueryChange, onPodFilterToggle, onWatchToggle, onWatchInterval, onRefresh, onActivate, onClose, onRenameTab, onContextMenu, fallbackCtx }: {
+function podMatchesAgeFilter(item: KubeResourceItem, filter: string): boolean {
+  if (filter === 'all' || !item.cells.age) return true;
+  const createdAt = new Date(item.cells.age).getTime();
+  if (!Number.isFinite(createdAt)) return true;
+  const now = Date.now();
+  if (filter === 'today') {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    return createdAt >= startOfToday.getTime();
+  }
+  const month = 30 * 24 * 60 * 60 * 1000;
+  if (filter === 'older') return now - createdAt > month;
+  const durations: Record<string, number> = {
+    '10m': 10 * 60 * 1000,
+    '30m': 30 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '6h': 6 * 60 * 60 * 1000,
+    '3d': 3 * 24 * 60 * 60 * 1000,
+    '5d': 5 * 24 * 60 * 60 * 1000,
+    '15d': 15 * 24 * 60 * 60 * 1000,
+    '1mo': month,
+  };
+  return durations[filter] == null || now - createdAt <= durations[filter];
+}
+
+function TabBar({ activeTab, contextTabs, workloadTabs, compareTab, activeContextTab, searchQuery, onSearchQueryChange, onPodFilterToggle, onPodAgeFilterChange, onWatchToggle, onWatchInterval, onRefresh, onActivate, onClose, onRenameTab, onContextMenu, fallbackCtx }: {
   activeTab: string; contextTabs: KubeContextTab[]; workloadTabs: KubeWorkloadTab[]; compareTab: KubeCompareTab | null;
   activeContextTab?: KubeContextTab; searchQuery: string;
   onSearchQueryChange: (query: string) => void;
   onPodFilterToggle: (tabId: string, category: string) => void;
+  onPodAgeFilterChange: (tabId: string, ageFilter: string) => void;
   onWatchToggle: (tabId: string, enabled: boolean) => void;
   onWatchInterval: (tabId: string, seconds: number) => void;
   onRefresh: (tabId: string) => void;
@@ -296,6 +352,7 @@ function TabBar({ activeTab, contextTabs, workloadTabs, compareTab, activeContex
           searchQuery={searchQuery}
           onSearchQueryChange={onSearchQueryChange}
           onPodFilterToggle={onPodFilterToggle}
+          onPodAgeFilterChange={onPodAgeFilterChange}
           onWatchToggle={onWatchToggle}
           onWatchInterval={onWatchInterval}
           onRefresh={onRefresh}
@@ -783,8 +840,10 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   const canOpenPod = tab.kind === 'pods';
   const showPodFilter = tab.kind === 'pods';
   const filters = tab.podFilters ?? ['ReplicaSet'];
+  const ageFilter = tab.podAgeFilter ?? 'all';
+  const visiblePods = (item: KubeResourceItem) => filters.includes(item.cells.owner ?? 'None') && podMatchesAgeFilter(item, ageFilter);
   const visiblePodStatus = tab.kind === 'pods'
-    ? summarizeKubePods(tab.resources.items.filter((item) => filters.includes(item.cells.owner ?? 'None')))
+    ? summarizeKubePods(tab.resources.items.filter(visiblePods))
     : tab.podStatus;
   // Owner-kind filter chips are built from the kinds actually present (Job,
   // ReplicaSet, DaemonSet, StatefulSet, 'None', …) — no name-based logic.
@@ -792,7 +851,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   const query = searchQuery.trim().toLowerCase();
   const items = tab.resources.items
     .map((item, index) => ({ item, index }))
-    .filter(({ item }) => !showPodFilter || filters.includes(item.cells.owner ?? 'None'))
+    .filter(({ item }) => !showPodFilter || visiblePods(item))
     .filter(({ item }) => !query || [item.name, ...Object.values(item.cells)].some((value) => value.toLowerCase().includes(query)));
   const viewResource = async (index: number) => {
     const item = tab.resources.items[index];
@@ -1515,6 +1574,7 @@ export function KubeDescribeDialog({ title, json, query, error, onQueryChange, o
 export function K8sView({
   contexts, contextTabs, activeTab, workloadTabs, compareTab, error, searchQuery, onSearchQueryChange,
   onOpenContextTab, onTabNamespaceChange, onTabKindChange, onTabPodFilterToggle,
+  onTabPodAgeFilterChange,
   onTabWatchToggle, onTabWatchInterval, onRefreshTab, onSilentRefreshTab, onDescribeResource, onDeleteResource, onCopyResource, onViewResource, onRestartDeployment,
   onSelect, onOpenWorkload, onOpenPod, onSelectContextContainer, onOpenContextContainerLogs, onClosePodDrilldown, onToggleLogWatch, onRefreshLogs, onDownloadLogs, onClearLogs, onToggleLogWrap, onSelectWorkloadPod, onOpenPodLogs, onSelectWorkloadContainer, onOpenContainerLogs, onCompareContext, onAddCompareContext, onRemoveCompareSide,
   onActivateTab, onCloseTab, onRenameTab, onBack,
@@ -1573,6 +1633,7 @@ export function K8sView({
         searchQuery={searchQuery}
         onSearchQueryChange={onSearchQueryChange}
         onPodFilterToggle={onTabPodFilterToggle}
+        onPodAgeFilterChange={onTabPodAgeFilterChange}
         onWatchToggle={onTabWatchToggle}
         onWatchInterval={onTabWatchInterval}
         onRefresh={onRefreshTab}

@@ -20,7 +20,7 @@ import {
   loadKubeContext,
   saveKubeContext,
 } from '../core/config.js';
-import { analyzeRepo, fetchCommitDetail, run } from '../core/git.js';
+import { analyzeRepo, fetchBranchCommits, fetchCommitDetail, run } from '../core/git.js';
 import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/remote.js';
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, approvePR, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
@@ -107,6 +107,7 @@ ipcMain.handle('initialize', async (_event, cliArgs: Partial<AppConfig>) => {
     workspace: cliArgs.workspace ?? savedCfg.workspace ?? '',
     base: cliArgs.base ?? savedCfg.base ?? 'main',
     release: cliArgs.release ?? savedCfg.release ?? 'R10',
+    releaseStartDate: cliArgs.releaseStartDate ?? savedCfg.releaseStartDate ?? '',
     syncInterval: cliArgs.syncInterval ?? savedCfg.syncInterval ?? 30,
     token: cliArgs.token ?? savedCfg.token ?? '',
     provider: (cliArgs.provider ?? savedCfg.provider ?? 'github') as Provider,
@@ -242,6 +243,10 @@ ipcMain.handle('sync-all-repos', async (_event, repoPaths: string[], base: strin
 
 ipcMain.handle('fetch-commit-detail', async (_event, repoPath: string, hash: string) => {
   return fetchCommitDetail(repoPath, hash);
+});
+
+ipcMain.handle('fetch-branch-commits', async (_event, repoPath: string, branch: string) => {
+  return fetchBranchCommits(repoPath, branch);
 });
 
 ipcMain.handle('get-remote-url', async (_event, repoPath: string) => {

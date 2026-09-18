@@ -11,6 +11,7 @@ interface PRDetailViewProps {
   onBack: () => void;
   onReview: () => void;
   onApprove: (comment: string) => Promise<void>;
+  onFindRelatedPRs: () => Promise<void>;
 }
 
 function stateColor(state: string): string {
@@ -75,7 +76,7 @@ function CopyableValue({ value, mono = false }: { value: string; mono?: boolean 
   </span>;
 }
 
-export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName, onBack, onReview, onApprove }: PRDetailViewProps) {
+export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName, onBack, onReview, onApprove, onFindRelatedPRs }: PRDetailViewProps) {
   const [expandedFiles, setExpandedFiles] = React.useState<Set<string>>(new Set());
   const [fileQuery, setFileQuery] = React.useState('');
   const [approvalOpen, setApprovalOpen] = React.useState(false);
@@ -83,6 +84,8 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
   const [approvalSubmitting, setApprovalSubmitting] = React.useState(false);
   const [approvalError, setApprovalError] = React.useState('');
   const [approvalComplete, setApprovalComplete] = React.useState(false);
+  const [findingRelatedPRs, setFindingRelatedPRs] = React.useState(false);
+  const [relatedPRsError, setRelatedPRsError] = React.useState('');
 
   React.useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -143,6 +146,19 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
     }
   };
 
+  const findRelatedPRs = async () => {
+    if (findingRelatedPRs) return;
+    setFindingRelatedPRs(true);
+    setRelatedPRsError('');
+    try {
+      await onFindRelatedPRs();
+    } catch (err) {
+      setRelatedPRsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFindingRelatedPRs(false);
+    }
+  };
+
   return (
     <div className="detail-view pr-detail-view">
       <div className="pr-detail-toolbar">
@@ -164,9 +180,11 @@ export function PRDetailView({ prDetail, loading, error, ownAuthor, gitUserName,
           </div>
           <div className="pr-detail-toolbar-actions pr-reference-actions">
             {prDetail.url && <button type="button" className="detail-action-btn secondary" onClick={() => window.api.openUrl(prDetail.url)} title="Open pull request in provider">↗ Open in provider</button>}
+            <button type="button" className="detail-action-btn secondary" onClick={() => void findRelatedPRs()} disabled={findingRelatedPRs} title="Find pull requests related to this Jira ticket">{findingRelatedPRs ? 'Searching…' : '⌕ Related PRs'}</button>
             <button type="button" className="detail-action-btn approve" onClick={() => { setApprovalOpen(true); setApprovalError(''); }} title="Approve pull request">✓ Approve</button>
             <button type="button" className="detail-action-btn primary" onClick={onReview}>✦ Review with AI</button>
           </div>
+          {relatedPRsError && <div className="pr-approval-error" role="alert">{relatedPRsError}</div>}
         </div>
       </header>
 
