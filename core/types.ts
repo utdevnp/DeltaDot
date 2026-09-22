@@ -394,7 +394,7 @@ export interface KubeContextTab {
   podFilters: string[]; // pods only: subset of owner kinds, combinable
   podAgeFilter: string; // pods only: age preset key, e.g. '10m' or 'older'
   watch: boolean; // live watch mode: poll the current resource table
-  watchInterval: number; // seconds between polls (default 1)
+  watchInterval: number; // seconds between polls (default 2)
   selected: number;
   loading: boolean;
   refreshing?: boolean;

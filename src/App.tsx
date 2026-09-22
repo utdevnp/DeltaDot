@@ -1153,7 +1153,7 @@ export function App() {
     const tab: KubeContextTab = {
       id: ctxName, context: ctxName, namespace: defaultNs, namespaces: [],
       kind: 'pods', resources: { kind: 'pods', columns: [], items: [] },
-      podFilters: ['ReplicaSet'], podAgeFilter: 'all', watch: false, watchInterval: 1,
+      podFilters: ['ReplicaSet'], podAgeFilter: 'all', watch: false, watchInterval: 2,
       selected: 0, loading: true, error: '',
     };
     setKubeContextTabs((prev) => [...prev, tab]);
@@ -1519,7 +1519,7 @@ export function App() {
     if (existing) { setKubeActiveTab(id); return; }
     const logTab: KubeWorkloadTab = {
       id, context: tab.context, name: drilldown.podName, namespace: drilldown.namespace,
-      label: `logs · ${container}`, mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
+      label: `logs · ${container}`, mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
     setKubeActiveTab(id);
@@ -1635,7 +1635,7 @@ export function App() {
     const logTab: KubeWorkloadTab = {
       id, context: workload.context, name: pod.name, namespace: pod.namespace,
       label: container ? `logs · ${container}` : 'logs',
-      mode: 'pod-logs', detail: null, container, label: container ? `logs · ${container}` : 'logs', logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
+      mode: 'pod-logs', detail: null, container, label: container ? `logs · ${container}` : 'logs', logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
     setKubeActiveTab(id);
@@ -1661,7 +1661,7 @@ export function App() {
     }
     const logTab: KubeWorkloadTab = {
       id, context: containerTab.context, name: containerTab.name, namespace: containerTab.namespace,
-      mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 1, wrap: false, loading: true, logsLoading: true,
+      mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
     setKubeActiveTab(id);

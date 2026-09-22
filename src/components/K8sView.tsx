@@ -257,10 +257,10 @@ function ContextTabControls({ tab, searchQuery, onSearchQueryChange, onPodFilter
       >{tab.watch ? '● watching' : '▶ watch'}</button>
       {tab.watch && <>
         <input
-          type="number" min={1} step={1} value={tab.watchInterval ?? 1}
+          type="number" min={1} step={1} value={tab.watchInterval ?? 2}
           onChange={(e) => onWatchInterval(tab.id, parseInt(e.target.value, 10) || 1)}
           style={{ width: 44, padding: '2px 4px', fontFamily: 'inherit', fontSize: 11, textAlign: 'center', background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: 4, outline: 'none' }}
-          title="Watch interval in seconds (default 1)"
+          title="Watch interval in seconds (default 2)"
         />
         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>sec</span>
       </>}
@@ -882,7 +882,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   };
   // Watch mode: poll the current resource table every watchInterval seconds —
   // silently (no loading state, no page flicker).
-  const intervalMs = Math.max(1, tab.watchInterval ?? 1) * 1000;
+  const intervalMs = Math.max(1, tab.watchInterval ?? 2) * 1000;
   React.useEffect(() => {
     if (!tab.watch) return;
     const id = setInterval(() => onSilentRefresh(tab.id), intervalMs);
@@ -1073,7 +1073,7 @@ function LegacyPodLogsView({ tab, onClose, onToggleWatch, onWatchInterval, onRef
   onDownload: (mode: 'visible' | 'screen' | 'entire', logContent: string) => void;
   onToggleWrap: (enabled: boolean) => void;
 }) {
-  const intervalMs = Math.max(1, tab.watchInterval ?? 1) * 1000;
+  const intervalMs = Math.max(1, tab.watchInterval ?? 2) * 1000;
   const logRef = React.useRef<HTMLPreElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
@@ -1144,7 +1144,7 @@ function LegacyPodLogsView({ tab, onClose, onToggleWatch, onWatchInterval, onRef
               type="number"
               min={1}
               step={1}
-              value={tab.watchInterval ?? 1}
+              value={tab.watchInterval ?? 2}
               onChange={(e) => onWatchInterval(parseInt(e.target.value, 10) || 1)}
               style={{ width: 52, padding: '3px 6px', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 11, textAlign: 'center' }}
               title="Log refresh interval in seconds"
