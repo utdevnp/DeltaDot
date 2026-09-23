@@ -46,6 +46,7 @@ export async function fetchGitLabPRs(
     url: item.web_url as string,
     repoName: repoName ?? '',
     approved: false,
+    hasConflicts: typeof item.has_conflicts === 'boolean' ? item.has_conflicts : undefined,
   }));
 
   if (exhaustive) return { prs: mrs, page: 1, pageSize: requestSize, hasMore: false };

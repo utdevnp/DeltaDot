@@ -1,0 +1,48 @@
+import type { KubeContext, KubeContextTab, PR, RepoState } from '../../../core/types.js';
+
+export interface DashboardProps {
+  workspaceName: string;
+  workspacePath: string;
+  base: string;
+  release: string;
+  repos: RepoState[];
+  prs: PR[];
+  kubeContexts: KubeContext[];
+  kubeContextTabs: KubeContextTab[];
+  lastSync: string;
+  prLastUpdated: string;
+  prLoading: boolean;
+  syncInterval: number;
+  isSyncing: boolean;
+  syncProgress: { done: number; total: number };
+  onSyncAll: () => void;
+  onRefreshPRs: () => void;
+  onOpenRepositories: () => void;
+  onOpenPRs: () => void;
+  onOpenKubernetes: () => void;
+  onOpenSettings: () => void;
+  onOpenWorkspace: () => void;
+  onOpenRepo: (repo: RepoState) => void;
+  onOpenPRDetail: (pr: PR) => void;
+  onOpenKubeDetail: (entry: KubeActivityEntry) => void;
+  onViewMetric: (metric: DashboardMetricKey) => void;
+}
+
+export type DashboardMetricKey = 'repositories' | 'behind' | 'pullRequests' | 'errors';
+
+export type KubeActivityEntry = {
+  context: string;
+  kind: 'Pod' | 'Deployment';
+  name: string;
+  namespace: string;
+  updatedAt: string;
+  healthy: boolean;
+  reason: string;
+};
+
+export type ActivityTab = 'repos' | 'k8s';
+
+export type DashboardDrawerItem =
+  | { type: 'repo'; repo: RepoState }
+  | { type: 'pr'; pr: PR }
+  | { type: 'kube'; entry: KubeActivityEntry };

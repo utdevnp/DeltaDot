@@ -20,6 +20,7 @@ import { WorkspacePanel } from './components/WorkspacePanel';
 import { AppNav } from './components/AppNav';
 import { AddWorkspaceDialog } from './components/AddWorkspaceDialog';
 import { CloneDialog } from './components/CloneDialog';
+import { Dashboard } from './components/Dashboard';
 import { RepoPRInspector, type RepoPRInspectorTab } from './components/RepoPRInspector';
 import { CommitFilterControls, RepoCommitInspector, type RepoCommitInspectorTab } from './components/RepoCommitInspector';
 import { RepoInspector, type RepoInspectorTab } from './components/RepoInspector';
@@ -124,6 +125,7 @@ export function App() {
   const [selectedCommit, setSelectedCommit] = useState(0);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [lastSync, setLastSync] = useState('');
+  const [lastPRSync, setLastPRSync] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState({ done: 0, total: 0 });
   const [workspacePath, setWorkspacePath] = useState('');
@@ -158,6 +160,7 @@ export function App() {
   // Search / Command
   const [inputMode, setInputMode] = useState<'none' | 'search' | 'command'>('none');
   const [repoSearchQuery, setRepoSearchQuery] = useState('');
+  const [repoStatusFilter, setRepoStatusFilter] = useState<'all' | 'behind' | 'error'>('all');
   const [kubeSearchQuery, setKubeSearchQuery] = useState('');
   const [commandQuery, setCommandQuery] = useState('');
 
@@ -455,6 +458,7 @@ export function App() {
       setCfg(config);
       setWorkspacePath(config.workspace);
       setPRs([]);
+      setLastPRSync('');
       setRepoPRTabs([]);
       setActiveRepoPRTab('');
       setRepoCommitTabs([]);
@@ -953,6 +957,7 @@ export function App() {
       setPRError(errors.length === 1 ? errors[0]! : `Failed for ${errors.length} repo(s). Check your token and network.`);
     }
     setPRLoading(false);
+    setLastPRSync(new Date().toISOString());
   }, [cfg, repos, prFilter]);
 
   const loadMorePRs = useCallback(async () => {
@@ -989,6 +994,7 @@ export function App() {
       setPRError(err instanceof Error ? err.message : String(err));
     } finally {
       setPRLoading(false);
+      setLastPRSync(new Date().toISOString());
     }
   }, [prFilter, prPagination, selectedRepo]);
 
@@ -2400,9 +2406,11 @@ export function App() {
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
-  const filteredRepos = repoSearchQuery
-    ? repos.filter((r) => r.name.toLowerCase().includes(repoSearchQuery.toLowerCase()))
-    : repos;
+  const filteredRepos = repos.filter((repo) => {
+    const matchesStatus = repoStatusFilter === 'all' || (repoStatusFilter === 'behind' ? repo.status === 'behind' : repo.status === 'error');
+    const matchesSearch = !repoSearchQuery || repo.name.toLowerCase().includes(repoSearchQuery.toLowerCase());
+    return matchesStatus && matchesSearch;
+  });
 
   // ─── Config Save ─────────────────────────────────────────────────────────
 
@@ -2460,6 +2468,28 @@ export function App() {
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
+  const openDashboardPRDetail = async (pr: PR) => {
+    const repo = reposRef.current.find((item) => item.name === pr.repoName);
+    if (!repo || !cfg.token) { setView('prs'); return; }
+    setSelectedRepo(reposRef.current.findIndex((item) => item.path === repo.path));
+    setSelectedPR(0);
+    setPRDetail(null);
+    setPRDetailError('');
+    setPRDetailLoading(true);
+    setView('prdetail');
+    try {
+      const remoteInfo = await window.api.getRemoteOwnerRepo(repo.path);
+      if (!remoteInfo) throw new Error(`Could not detect the remote repository for ${repo.name}.`);
+      const provider = cfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repo.path));
+      const detail = await window.api.fetchPRDetail(remoteInfo.owner, pr.repoName || repo.name, pr.number, provider, cfg.token);
+      setPRDetail({ ...detail, repoName: detail.repoName || pr.repoName || repo.name });
+    } catch (err) {
+      setPRDetailError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPRDetailLoading(false);
+    }
+  };
+
   if (!cfg) {
     return (
       <div className="app-container">
@@ -2472,6 +2502,52 @@ export function App() {
 
   const renderView = () => {
     switch (view) {
+      case 'home':
+        return (
+          <Dashboard
+            workspaceName={workspaces.find((workspace) => workspace.id === activeWorkspaceId)?.displayName || workspaces.find((workspace) => workspace.id === activeWorkspaceId)?.name || workspacePath.split(/[\\/]/).pop() || workspacePath}
+            workspacePath={workspacePath}
+            base={cfg.base}
+            release={cfg.release}
+            repos={repos.filter((repo) => !(cfg.ignoredRepos ?? []).includes(repo.path))}
+            prs={prs}
+            kubeContexts={kubeContexts}
+            kubeContextTabs={kubeContextTabs}
+            lastSync={lastSync}
+            prLastUpdated={lastPRSync}
+            prLoading={prLoading}
+            syncInterval={cfg.syncInterval || 10}
+            isSyncing={isSyncing}
+            syncProgress={syncProgress}
+            onSyncAll={() => syncAllRef.current()}
+            onRefreshPRs={() => { if (cfg.token) fetchAllPRsRef.current('open', reposRef.current); }}
+            onOpenRepositories={() => setView('list')}
+            onOpenPRs={() => handleChangeView('prs')}
+            onOpenKubernetes={() => handleChangeView('k8s')}
+            onOpenSettings={() => setView('config')}
+            onOpenWorkspace={() => selectWorkspace()}
+            onOpenRepo={(repo) => {
+              setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
+              setView('list');
+              openRepoCommitInspector(repo);
+            }}
+            onOpenPRDetail={(pr) => { void openDashboardPRDetail(pr); }}
+            onOpenKubeDetail={() => handleChangeView('k8s')}
+            onViewMetric={(metric) => {
+              if (metric === 'pullRequests') {
+                setPRFilter('open');
+                setPrAllRepos(true);
+                setSelectedPR(0);
+                setView('prs');
+                if (cfg.token) fetchAllPRsRef.current('open', reposRef.current);
+                return;
+              }
+              setRepoSearchQuery('');
+              setRepoStatusFilter(metric === 'behind' ? 'behind' : metric === 'errors' ? 'error' : 'all');
+              setView('list');
+            }}
+          />
+        );
       case 'config':
         return (
           <ConfigDialog
@@ -2919,6 +2995,7 @@ export function App() {
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
             <AppNav
               currentView={view}
+              onHome={() => setView('home')}
               onNavigate={(nextView) => nextView === 'review'
                 ? (reviewContext.prNumber ? setView('review') : setView('prs'))
                 : handleChangeView(nextView)}
@@ -3063,7 +3140,7 @@ export function App() {
           onBrowse={browseWorkspace}
           defaultBase={cfg?.base ?? 'main'}
           defaultRelease={cfg?.release ?? 'R10'}
-          defaultSyncInterval={cfg?.syncInterval ?? 30}
+          defaultSyncInterval={cfg?.syncInterval ?? 10}
         />
       )}
 

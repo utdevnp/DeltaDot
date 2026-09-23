@@ -45,6 +45,7 @@ export async function fetchGitHubPRs(
     url: item.html_url as string,
     repoName: repoName ?? '',
     approved: false,
+    hasConflicts: typeof item.mergeable === 'boolean' ? !item.mergeable : item.mergeable_state === 'dirty' ? true : undefined,
   }));
 
   // Approval status is not needed for historical Jira searches and checking

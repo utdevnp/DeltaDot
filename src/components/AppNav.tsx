@@ -4,6 +4,7 @@ import type { View } from '../../core/types.js';
 interface AppNavProps {
   currentView: View;
   onNavigate: (view: 'list' | 'prs' | 'review' | 'k8s') => void;
+  onHome: () => void;
   onOpenSettings: () => void;
 }
 
@@ -24,11 +25,15 @@ function isActive(itemView: NavItem['view'], currentView: View): boolean {
   return currentView === itemView;
 }
 
-export function AppNav({ currentView, onNavigate, onOpenSettings }: AppNavProps) {
+export function AppNav({ currentView, onNavigate, onHome, onOpenSettings }: AppNavProps) {
   return (
     <nav className="app-nav" aria-label="Primary navigation">
-      <button className="app-nav-collapse" type="button" aria-label="Navigation is icon-only" title="Navigation">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+      <button className={`app-nav-home ${currentView === 'home' ? 'active' : ''}`} type="button" aria-label="Home dashboard" title="Home dashboard" onClick={onHome}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m3 10 9-7 9 7" />
+          <path d="M5 9v11h14V9" />
+          <path d="M9 20v-6h6v6" />
+        </svg>
       </button>
       <div className="app-nav-items">
         {navItems.map((item) => (
@@ -45,7 +50,6 @@ export function AppNav({ currentView, onNavigate, onOpenSettings }: AppNavProps)
         ))}
       </div>
       <div className="app-nav-spacer" />
-      <div className="app-nav-user" aria-hidden="true">SK<span /></div>
     </nav>
   );
 }

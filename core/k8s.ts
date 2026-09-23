@@ -150,6 +150,17 @@ function lastUpdatedOf(d: any): string {
   return latest;
 }
 
+function resourceUpdatedAt(kindId: string, item: any): string {
+  const created = iso(item?.metadata?.creationTimestamp);
+  if (kindId === 'deployments') return lastUpdatedOf(item) || created;
+  if (kindId !== 'pods') return created;
+  const timestamps: string[] = [
+    ...(item?.status?.conditions ?? []).flatMap((condition: any) => [condition?.lastTransitionTime, condition?.lastUpdateTime]),
+    ...(item?.status?.containerStatuses ?? []).flatMap((container: any) => [container?.state?.running?.startedAt, container?.state?.terminated?.finishedAt]),
+  ].map(iso).filter(Boolean);
+  return timestamps.sort().at(-1) || created;
+}
+
 function toSummary(d: any): KubeDeploymentSummary {
   const c = d.spec?.template?.spec?.containers?.[0];
   return {
@@ -899,6 +910,7 @@ export async function getKubeResources(
         key: `${cells.namespace ? `${cells.namespace}/` : ''}${cells.name}`,
         name: cells.name,
         namespace: cells.namespace,
+        updatedAt: resourceUpdatedAt(kindId, item),
         cells,
           containers: kindId === 'pods'
             ? (item.spec?.containers ?? []).map((container: any) => container.name).filter(Boolean)

@@ -15,7 +15,7 @@ interface AddWorkspaceDialogProps {
 
 export function AddWorkspaceDialog({
   editWorkspace, onSave, onEditSave, onClose, onBrowse,
-  defaultBase = 'main', defaultRelease = 'R10', defaultSyncInterval = 30,
+  defaultBase = 'main', defaultRelease = 'R10', defaultSyncInterval = 10,
 }: AddWorkspaceDialogProps) {
   const isEdit = !!editWorkspace;
   const [folder, setFolder] = useState(editWorkspace?.path ?? '');
@@ -34,12 +34,12 @@ export function AddWorkspaceDialog({
         folder.trim() || editWorkspace!.path,
         base.trim(),
         release.trim(),
-        Math.max(1, parseFloat(syncInterval) || 30),
+        Math.max(1, parseFloat(syncInterval) || 10),
         color,
       );
     } else if (!isEdit && onSave) {
       if (!folder.trim()) return;
-      onSave(name.trim() || folder.trim().split(/[\\/]/).pop() || 'Workspace', folder.trim(), base.trim(), release.trim(), Math.max(1, parseFloat(syncInterval) || 30), color);
+      onSave(name.trim() || folder.trim().split(/[\\/]/).pop() || 'Workspace', folder.trim(), base.trim(), release.trim(), Math.max(1, parseFloat(syncInterval) || 10), color);
     }
   };
 
@@ -199,7 +199,7 @@ export function AddWorkspaceDialog({
             <div className="workspace-select-control"><span className="branch-glyph">◷</span><select
               value={syncInterval}
               onChange={(e) => setSyncInterval(e.target.value)}
-            >{[5, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} minutes</option>)}</select><span className="select-chevron">⌄</span></div>
+            >{[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} minutes</option>)}</select><span className="select-chevron">⌄</span></div>
             <small>How often DeltaDot fetches and updates this workspace.</small>
           </div>
 

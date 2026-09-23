@@ -7,6 +7,7 @@ interface BottomBarProps {
 }
 
 const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
+  home: [],
   list: [
     { key: '↑↓ j/k', desc: 'navigate' },
     { key: '↵ / c', desc: 'commits' },

@@ -29,6 +29,8 @@ function folderName(p: string): string {
 export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, onEditWorkspace, onOpenConfig, workspaces, activeWorkspaceId, onSwitchWorkspace, onAddWorkspace, theme, onToggleTheme }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<{ version: string; name: string } | null>(null);
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const activeWorkspaceName = activeWorkspace?.displayName || activeWorkspace?.name || folderName(workspacePath);
   const frame = Math.floor(Date.now() / 120) % SPINNER.length;
   const spinner = SPINNER[frame] ?? '?';
 
@@ -53,18 +55,29 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
       </div>
       <span className="separator">│</span>
       <div className="workspace-switcher">
-        <span className="workspace-switcher-label">workspace</span>
-        <select
-          aria-label="Active workspace"
-          value={activeWorkspaceId ?? ''}
-          onChange={(e) => {
-            const workspace = workspaces.find((item) => item.id === e.target.value);
-            if (workspace) onSwitchWorkspace(workspace);
-          }}
-        >
-          {workspaces.length === 0 && <option value="">{folderName(workspacePath)}</option>}
-          {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.displayName || workspace.name}</option>)}
-        </select>
+        <div className="workspace-switcher-heading">
+          <span className="workspace-switcher-label">Workspace</span>
+          {workspaces.length > 0 && <span className="workspace-switcher-count">{workspaces.length}</span>}
+        </div>
+        <div className="workspace-select-shell">
+          <span className="workspace-select-copy">
+            <span className="workspace-select-name">{activeWorkspaceName}</span>
+          </span>
+          <svg className="workspace-select-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+          <select
+            aria-label="Active workspace"
+            value={activeWorkspaceId ?? ''}
+            onChange={(e) => {
+              const workspace = workspaces.find((item) => item.id === e.target.value);
+              if (workspace) onSwitchWorkspace(workspace);
+            }}
+          >
+            {workspaces.length === 0 && <option value="">{folderName(workspacePath)}</option>}
+            {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.displayName || workspace.name}</option>)}
+          </select>
+        </div>
         <button type="button" className="workspace-action-button" onClick={onEditWorkspace} aria-label="Edit workspace" title="Edit workspace">✎</button>
         <button type="button" className="workspace-add-button" onClick={onAddWorkspace} aria-label="Add workspace" title="Add workspace">+</button>
       </div>

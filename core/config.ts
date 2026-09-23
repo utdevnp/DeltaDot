@@ -151,7 +151,7 @@ export function resolveCliConfig(cliOpts: { path?: string; base?: string; releas
     release:      cliOpts.release      ?? savedCfg.release      ?? 'R10',
     releaseStartDate: savedCfg.releaseStartDate ?? '',
     syncInterval: cliOpts.syncInterval ? parseFloat(cliOpts.syncInterval)
-                                        : (savedCfg.syncInterval ?? 30),
+                                        : (savedCfg.syncInterval ?? 10),
     token:        cliOpts.token        ?? savedCfg.token        ?? '',
     provider:     (cliOpts.provider    ?? savedCfg.provider     ?? 'github') as 'github' | 'gitlab' | 'bitbucket',
     taskProvider: savedCfg.taskProvider ?? 'none',

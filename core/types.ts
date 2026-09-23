@@ -1,7 +1,7 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type RepoStatus = 'loading' | 'stale' | 'syncing' | 'synced' | 'behind' | 'error';
-export type View = 'list' | 'commits' | 'detail' | 'config' | 'prs' | 'prdetail' | 'review' | 'k8s';
+export type View = 'home' | 'list' | 'commits' | 'detail' | 'config' | 'prs' | 'prdetail' | 'review' | 'k8s';
 export type InputMode = 'none' | 'search' | 'command';
 export type Provider = 'github' | 'gitlab' | 'bitbucket';
 export type TaskProvider = 'none' | 'jira' | 'clickup' | 'github';
@@ -117,6 +117,7 @@ export interface PR {
   url: string;
   repoName: string;
   approved: boolean;
+  hasConflicts?: boolean;
 }
 
 export interface PRPage {
@@ -423,6 +424,7 @@ export interface KubeResourceItem {
   key: string; // unique within the list (namespace/name)
   name: string;
   namespace: string;
+  updatedAt?: string; // newest meaningful status/update timestamp when available
   cells: Record<string, string>;
   containerStatuses?: Record<string, string>;
   containers?: string[];
