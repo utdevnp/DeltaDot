@@ -637,6 +637,10 @@ function podHealthStatus(p: any, containerStatuses: any[]): string {
 
   const ready = containerStatuses.filter((c: any) => c?.ready).length;
   if (phase === 'Running' && containerStatuses.length > 0 && ready === containerStatuses.length) {
+    // Readiness gates can keep a pod unready even when every container reports
+    // ready. The Ready condition is the authoritative pod-level signal.
+    const readyCondition = (p?.status?.conditions ?? []).find((condition: any) => condition?.type === 'Ready');
+    if (readyCondition && readyCondition.status !== 'True') return 'Running (not ready)';
     return phase;
   }
   if (phase === 'Succeeded') return phase;
@@ -680,6 +684,8 @@ const RESOURCE_SPECS: Record<string, ResourceSpec> = {
       return {
         name: d?.metadata?.name ?? '', namespace: d?.metadata?.namespace ?? '',
         ready: `${d?.status?.readyReplicas ?? 0}/${d?.spec?.replicas ?? 0}`,
+        available: String(d?.status?.availableReplicas ?? 0),
+        updated: String(d?.status?.updatedReplicas ?? 0),
         image: c?.image ?? '',
         strategy: d?.spec?.strategy?.type ?? '',
         age: ageOf(d),

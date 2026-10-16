@@ -18,13 +18,14 @@ export interface DashboardProps {
   onSyncAll: () => void;
   onRefreshPRs: () => void;
   onOpenRepositories: () => void;
-  onOpenPRs: () => void;
+  onOpenPRs: (filter?: 'all' | 'review' | 'conflicts' | 'approved') => void;
   onOpenKubernetes: () => void;
   onOpenSettings: () => void;
   onOpenWorkspace: () => void;
-  onOpenRepo: (repo: RepoState) => void;
+  onOpenCommitList: (repo: RepoState, commitHash?: string) => void;
   onOpenPRDetail: (pr: PR) => void;
   onOpenKubeDetail: (entry: KubeActivityEntry) => void;
+  onOpenKubeLogs: (entry: KubeActivityEntry) => void;
   onViewMetric: (metric: DashboardMetricKey) => void;
 }
 
@@ -32,12 +33,15 @@ export type DashboardMetricKey = 'repositories' | 'behind' | 'pullRequests' | 'e
 
 export type KubeActivityEntry = {
   context: string;
+  cluster?: string;
   kind: 'Pod' | 'Deployment';
   name: string;
   namespace: string;
   updatedAt: string;
   healthy: boolean;
+  pending: boolean;
   reason: string;
+  details: Record<string, string>;
 };
 
 export type ActivityTab = 'repos' | 'k8s';

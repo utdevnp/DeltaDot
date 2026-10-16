@@ -25,12 +25,26 @@ interface RepoCommitInspectorProps {
   onDateToChange: (value: string) => void;
 }
 
+export function useCloseDetailsOnOutside() {
+  React.useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      document.querySelectorAll<HTMLDetailsElement>('details[open]').forEach((element) => {
+        if (!element.contains(event.target)) element.open = false;
+      });
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, []);
+}
+
 export function CommitDateRangeFilter({ dateFrom, dateTo, onDateFromChange, onDateToChange }: { dateFrom: string; dateTo: string; onDateFromChange: (value: string) => void; onDateToChange: (value: string) => void }) {
   const label = dateFrom || dateTo ? `${dateFrom || '…'}${dateTo ? ` – ${dateTo}` : ''}` : '';
   const initial = dateFrom ? new Date(`${dateFrom}T00:00:00`) : new Date();
   const [month, setMonth] = React.useState(new Date(initial.getFullYear(), initial.getMonth(), 1));
   const [hoverDate, setHoverDate] = React.useState('');
   const selectingEnd = React.useRef(false);
+  useCloseDetailsOnOutside();
   React.useEffect(() => { if (!dateFrom && !dateTo) document.querySelectorAll<HTMLDetailsElement>('.commit-date-range-filter[open]').forEach((element) => { element.open = false; }); }, [dateFrom, dateTo]);
   const monthLabel = month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   const firstDay = new Date(month.getFullYear(), month.getMonth(), 1).getDay();
@@ -48,9 +62,10 @@ export function CommitDateRangeFilter({ dateFrom, dateTo, onDateFromChange, onDa
 }
 
 export function CommitFilterControls({ branchFilter, authorFilters, authors, baseBranch, releaseBranch, dateFrom, dateTo, onBranchFilterChange, onAuthorFilterChange, onDateFromChange, onDateToChange }: { branchFilter: 'all' | 'release' | 'base'; authorFilters: string[]; authors: string[]; baseBranch: string; releaseBranch: string; dateFrom: string; dateTo: string; onBranchFilterChange: (value: 'all' | 'release' | 'base') => void; onAuthorFilterChange: (value: string[]) => void; onDateFromChange: (value: string) => void; onDateToChange: (value: string) => void }) {
+  useCloseDetailsOnOutside();
   const toggleAuthor = (author: string) => onAuthorFilterChange(authorFilters.includes(author) ? authorFilters.filter((item) => item !== author) : [...authorFilters, author]);
   const allAuthorsSelected = authorFilters.length === 0;
-  return <div className="repo-pr-inspector-actions"><select className="repo-pr-filter" value={branchFilter} onChange={(event) => onBranchFilterChange(event.target.value as 'all' | 'release' | 'base')} aria-label="Filter commits by branch"><option value="all">All branches</option><option value="release">{releaseBranch}</option><option value="base">{baseBranch}</option></select><details className="commit-author-filter"><summary>{allAuthorsSelected ? 'All authors' : `${authorFilters.length} authors`}</summary><div className="commit-author-menu"><label><input type="checkbox" checked={allAuthorsSelected} onChange={() => onAuthorFilterChange([])} /> All authors</label>{authors.map((author) => <label key={author}><input type="checkbox" checked={authorFilters.includes(author)} onChange={() => toggleAuthor(author)} /> {author}</label>)}</div></details><CommitDateRangeFilter dateFrom={dateFrom} dateTo={dateTo} onDateFromChange={onDateFromChange} onDateToChange={onDateToChange} /></div>;
+  return <div className="repo-pr-inspector-actions"><select className="repo-pr-filter" value={branchFilter} onChange={(event) => onBranchFilterChange(event.target.value as 'all' | 'release' | 'base')} aria-label="Filter commits by branch"><option value="all">All branches</option><option value="release">{releaseBranch}</option><option value="base">{baseBranch}</option></select><details className="commit-author-filter"><summary>{allAuthorsSelected ? 'All authors' : `Exclude ${authorFilters.length} author${authorFilters.length === 1 ? '' : 's'}`}</summary><div className="commit-author-menu"><label><input type="checkbox" checked={allAuthorsSelected} onChange={() => onAuthorFilterChange([])} /> All authors</label>{authors.map((author) => <label key={author}><input type="checkbox" checked={authorFilters.includes(author)} onChange={() => toggleAuthor(author)} /> {author}</label>)}</div></details><CommitDateRangeFilter dateFrom={dateFrom} dateTo={dateTo} onDateFromChange={onDateFromChange} onDateToChange={onDateToChange} /></div>;
 }
 
 export function RepoCommitInspector({ tabs, activeId, onActivate, onClose, onSelect, onOpenDetail, embedded = false, branchFilter, authorFilters, onBranchFilterChange, onAuthorFilterChange, dateFrom, dateTo, onDateFromChange, onDateToChange }: RepoCommitInspectorProps) {
@@ -70,7 +85,7 @@ export function RepoCommitInspector({ tabs, activeId, onActivate, onClose, onSel
   const query = searchQuery.trim().toLowerCase();
   const selectedAuthors = new Set(authorFilters.map((author) => author.trim().toLowerCase()));
   const allAuthorsSelected = authorFilters.length === 0;
-  const authorCommits = allAuthorsSelected ? branchCommits : branchCommits.filter((commit) => commit.author && selectedAuthors.has(commit.author.trim().toLowerCase()));
+  const authorCommits = allAuthorsSelected ? branchCommits : branchCommits.filter((commit) => !commit.author || !selectedAuthors.has(commit.author.trim().toLowerCase()));
   const dateCommits = authorCommits.filter((commit) => { const date = commit.date?.slice(0, 10) ?? ''; return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo); });
   const visibleCommits = query ? dateCommits.filter((commit) => [commit.hash, commit.message, commit.author, commit.kind].some((value) => value.toLowerCase().includes(query))) : dateCommits;
   const startResize = (event: React.PointerEvent<HTMLDivElement>) => { event.preventDefault(); dragRef.current = { startY: event.clientY, startHeight: height }; event.currentTarget.setPointerCapture(event.pointerId); };

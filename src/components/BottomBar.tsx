@@ -26,11 +26,13 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
   commits: [
     { key: '↑↓ j/k', desc: 'navigate' },
     { key: '↵', desc: 'detail' },
+    { key: 'o', desc: 'open commit' },
     { key: 's', desc: 'sync' },
     { key: 'b / Esc', desc: 'back' },
     { key: 'q', desc: 'quit' },
   ],
   detail: [
+    { key: 'o', desc: 'open commit' },
     { key: 'b / Esc', desc: 'back' },
     { key: 'q', desc: 'quit' },
   ],
@@ -73,6 +75,7 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
     { key: 'b / Esc', desc: 'close / back' },
     { key: 'q', desc: 'quit' },
   ],
+  mapping: [],
 };
 
 export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
@@ -111,7 +114,7 @@ export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
           </span>
         </React.Fragment>
       ))}
-      <span className="bottom-bar-version">DeltaDot {version || 'v1.1.1'}</span>
+      <span className="bottom-bar-version">DeltaDot {version || 'v1.1.2'}</span>
     </div>
   );
 }

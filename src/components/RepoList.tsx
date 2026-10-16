@@ -23,7 +23,11 @@ interface RepoListProps {
   ignoredRepoPaths: string[];
   onToggleIgnoreRepo: (repo: RepoState) => void;
   openPRCounts: Record<string, number | string | null>;
+  statusFilter: RepoStatusFilter;
+  onStatusFilterChange: (filter: RepoStatusFilter) => void;
 }
+
+export type RepoStatusFilter = 'all' | 'synced' | 'notSynced' | 'notInRelease' | 'error';
 
 type MenuIconName = 'commits' | 'pulls' | 'sync' | 'compare' | 'external' | 'copy' | 'ignore';
 
@@ -63,17 +67,21 @@ function statusText(repo: RepoState, frame: number): { text: string; color: stri
   }
 }
 
-export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, base, release, onSyncAll, searchQuery, onSearchQueryChange, onOpenCommits, onOpenPRs, onSyncRepo, onOpenCompare, onOpenRemote, onCopyPath, onCopyRemote, ignoredRepoPaths, onToggleIgnoreRepo, openPRCounts }: RepoListProps) {
+export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, base, release, onSyncAll, searchQuery, onSearchQueryChange, onOpenCommits, onOpenPRs, onSyncRepo, onOpenCompare, onOpenRemote, onCopyPath, onCopyRemote, ignoredRepoPaths, onToggleIgnoreRepo, openPRCounts, statusFilter, onStatusFilterChange }: RepoListProps) {
   const [frame, setFrame] = useState(0);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; repo: RepoState } | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const contextMenuRef = React.useRef<HTMLDivElement>(null);
   const [showIgnored, setShowIgnored] = useState(false);
   const ignoredSet = new Set(ignoredRepoPaths);
-  const visibleRepos = showIgnored ? repos : repos.filter((repo) => !ignoredSet.has(repo.path));
-  const syncedCount = visibleRepos.filter((repo) => repo.status === 'synced').length;
-  const notInReleaseCount = visibleRepos.filter((repo) => repo.missingRelease).length;
-  const notSyncedCount = visibleRepos.filter((repo) => repo.status === 'behind').length;
+  const availableRepos = showIgnored ? repos : repos.filter((repo) => !ignoredSet.has(repo.path));
+  const visibleRepos = availableRepos.filter((repo) => statusFilter === 'all' || (statusFilter === 'synced' ? repo.status === 'synced' : statusFilter === 'notSynced' ? repo.status === 'behind' : statusFilter === 'notInRelease' ? Boolean(repo.missingRelease) : repo.status === 'error'));
+  const syncedCount = availableRepos.filter((repo) => repo.status === 'synced').length;
+  const notInReleaseCount = availableRepos.filter((repo) => repo.missingRelease).length;
+  const notSyncedCount = availableRepos.filter((repo) => repo.status === 'behind').length;
+  const errorCount = availableRepos.filter((repo) => repo.status === 'error').length;
+
+  const statusChip = (filter: RepoStatusFilter, className: string, label: string, count: number) => <button type="button" className={`repo-status-chip ${className} ${statusFilter === filter ? 'is-active' : ''}`} title={label} data-tooltip={label} onClick={() => onStatusFilterChange(statusFilter === filter ? 'all' : filter)}>{filter === 'all' ? 'All' : count}</button>;
 
   useEffect(() => {
     const timer = setInterval(() => setFrame((f) => f + 1), 120);
@@ -102,9 +110,11 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, b
           <div><strong>Repositories</strong><span className="repo-view-scope">Checking {release} → {base}</span></div>
           <div className="repo-view-actions">
             <input className="repo-search-input" value={searchQuery} onChange={(e) => onSearchQueryChange(e.target.value)} placeholder="Search repos..." aria-label="Search repositories" />
-            <span className="repo-status-chip repo-status-chip-synced" title="Sync" data-tooltip="Sync">{syncedCount}</span>
-            <span className="repo-status-chip repo-status-chip-not-synced" title="Not sync" data-tooltip="Not sync">{notSyncedCount}</span>
-            <span className="repo-status-chip repo-status-chip-not-in-release" title="Not in release" data-tooltip="Not in release">{notInReleaseCount}</span>
+            {statusChip('all', 'repo-status-chip-all', 'All repositories', availableRepos.length)}
+            {statusChip('synced', 'repo-status-chip-synced', 'Synced', syncedCount)}
+            {statusChip('notSynced', 'repo-status-chip-not-synced', 'Not synced', notSyncedCount)}
+            {statusChip('notInRelease', 'repo-status-chip-not-in-release', 'Not in release', notInReleaseCount)}
+            {statusChip('error', 'repo-status-chip-error', 'Sync errors', errorCount)}
             {ignoredRepoPaths.length > 0 && <button type="button" className="repo-show-ignored" onClick={() => setShowIgnored(true)}>Show ignored ({ignoredRepoPaths.length})</button>}
             <span>{visibleRepos.length} repos</span><button type="button" onClick={onSyncAll}>Sync all</button>
           </div>
@@ -124,9 +134,11 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, b
         <div><strong>Repositories</strong><span className="repo-view-scope">Checking {release} → {base}</span></div>
         <div className="repo-view-actions">
           <input className="repo-search-input" value={searchQuery} onChange={(e) => onSearchQueryChange(e.target.value)} placeholder="Search repos..." aria-label="Search repositories" />
-          <span className="repo-status-chip repo-status-chip-synced" title="Sync" data-tooltip="Sync">{syncedCount}</span>
-          <span className="repo-status-chip repo-status-chip-not-synced" title="Not sync" data-tooltip="Not sync">{notSyncedCount}</span>
-          <span className="repo-status-chip repo-status-chip-not-in-release" title="Not in release" data-tooltip="Not in release">{notInReleaseCount}</span>
+          {statusChip('all', 'repo-status-chip-all', 'All repositories', availableRepos.length)}
+          {statusChip('synced', 'repo-status-chip-synced', 'Synced', syncedCount)}
+          {statusChip('notSynced', 'repo-status-chip-not-synced', 'Not synced', notSyncedCount)}
+          {statusChip('notInRelease', 'repo-status-chip-not-in-release', 'Not in release', notInReleaseCount)}
+          {statusChip('error', 'repo-status-chip-error', 'Sync errors', errorCount)}
           {ignoredRepoPaths.length > 0 && <button type="button" className="repo-show-ignored" onClick={() => setShowIgnored((value) => !value)}>{showIgnored ? 'Hide ignored' : `Show ignored (${ignoredRepoPaths.length})`}</button>}
           <span>{visibleRepos.length} repos</span><button type="button" onClick={onSyncAll} disabled={isSyncing}>{isSyncing ? `Syncing ${syncProgress.done}/${syncProgress.total}` : 'Sync all'}</button>
         </div>

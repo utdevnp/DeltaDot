@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind } from '../core/types.js';
+import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind, DeploymentMappingTab } from '../core/types.js';
+import type { KubeActivityEntry } from './components/dashboard/types.js';
 import { summarizeKubePods } from '../core/k8s-compare.js';
 import { getVisibleConfigFields, KUBE_RESOURCE_OPTIONS, WORKSPACE_COLORS } from '../core/types.js';
 import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
-import { RepoList } from './components/RepoList';
+import { RepoList, type RepoStatusFilter } from './components/RepoList';
 import { CommitsView } from './components/CommitsView';
 import { DetailView } from './components/DetailView';
 import { ConfigDialog } from './components/ConfigDialog';
@@ -24,6 +25,7 @@ import { Dashboard } from './components/Dashboard';
 import { RepoPRInspector, type RepoPRInspectorTab } from './components/RepoPRInspector';
 import { CommitFilterControls, RepoCommitInspector, type RepoCommitInspectorTab } from './components/RepoCommitInspector';
 import { RepoInspector, type RepoInspectorTab } from './components/RepoInspector';
+import { MappingView } from './components/MappingView';
 
 const PR_PAGE_SIZE = 10;
 type PRPagination = { page: number; hasMore: boolean };
@@ -121,6 +123,7 @@ export function App() {
   const [repos, setRepos] = useState<RepoState[]>([]);
   const [repoPaths, setRepoPaths] = useState<string[]>([]);
   const [view, setView] = useState<View>('list');
+  const [mappingEditing, setMappingEditing] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState(0);
   const [selectedCommit, setSelectedCommit] = useState(0);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
@@ -160,7 +163,7 @@ export function App() {
   // Search / Command
   const [inputMode, setInputMode] = useState<'none' | 'search' | 'command'>('none');
   const [repoSearchQuery, setRepoSearchQuery] = useState('');
-  const [repoStatusFilter, setRepoStatusFilter] = useState<'all' | 'behind' | 'error'>('all');
+  const [repoStatusFilter, setRepoStatusFilter] = useState<RepoStatusFilter>('all');
   const [kubeSearchQuery, setKubeSearchQuery] = useState('');
   const [commandQuery, setCommandQuery] = useState('');
 
@@ -170,6 +173,7 @@ export function App() {
   const [prLoading, setPRLoading] = useState(false);
   const [prError, setPRError] = useState('');
   const [prFilter, setPRFilter] = useState<'open' | 'closed' | 'all'>('open');
+  const [prStatusFilter, setPRStatusFilter] = useState<'all' | 'review' | 'conflicts' | 'approved'>('all');
   const [prAllRepos, setPrAllRepos] = useState(false);
   const [prPagination, setPRPagination] = useState<Record<string, PRPagination>>({});
   const [prDetail, setPRDetail] = useState<PRDetail | null>(null);
@@ -536,8 +540,9 @@ export function App() {
     } catch { /* non-fatal */ }
   }, []);
 
-  const handleChangeView = useCallback(async (newView: 'list' | 'prs' | 'k8s') => {
+  const handleChangeView = useCallback(async (newView: 'list' | 'prs' | 'k8s' | 'mapping') => {
     setView(newView);
+    if (newView === 'mapping') { setMappingEditing(false); return; }
     if (newView !== 'k8s') {
       if (cfg) {
         const updatedCfg = { ...cfg, defaultView: newView };
@@ -1193,13 +1198,13 @@ export function App() {
     } catch (err) {
       setKubeError(err instanceof Error ? err.message : String(err));
     }
-  }, [createKubeContextTab]);
+  }, []);
 
   // Open (or activate) a context in its own tab; remember it as the last selected context.
   const openKubeContextTab = useCallback(async (ctxName: string) => {
     await createKubeContextTab(ctxName, true);
     window.api.saveKubeContext(ctxName);
-  }, [createKubeContextTab]);
+  }, []);
 
   // Change the namespace of a context tab and reload its current resource list.
   const handleKubeTabNamespaceChange = useCallback(async (tabId: string, ns: string) => {
@@ -1274,6 +1279,10 @@ export function App() {
     setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
       ...t, podAgeFilter: ageFilter, selected: 0,
     } : t));
+  }, []);
+
+  const handleKubeTabPodStatusFilterChange = useCallback((tabId: string, statusFilter: NonNullable<KubeContextTab['podStatusFilter']>) => {
+    setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, podStatusFilter: statusFilter, selected: 0 } : t));
   }, []);
 
   // Watch mode: toggle live polling of the tab's resource table.
@@ -1677,6 +1686,87 @@ export function App() {
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, logs, loading: false, logsLoading: false } : t));
     } catch (err) {
       setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, loading: false, logsLoading: false, error: err instanceof Error ? err.message : String(err) } : t));
+    }
+  }, []);
+
+  const openDashboardKubeLogs = useCallback(async (entry: KubeActivityEntry) => {
+    setView('k8s');
+    setKubeError('');
+    const namespace = entry.namespace || 'default';
+    const id = `${entry.context}/${namespace}/${entry.name}/logs/dashboard-${Date.now()}`;
+    const pendingLogTab: KubeWorkloadTab = {
+      id, context: entry.context, name: entry.name, namespace,
+      label: 'logs', mode: 'pod-logs', detail: null, container: undefined,
+      logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
+    };
+    setKubeWorkloadTabs((previous) => [...previous, pendingLogTab]);
+    setKubeActiveTab(id);
+    try {
+      const pods = entry.kind === 'Deployment'
+        ? await window.api.k8sDeploymentPods(entry.context, namespace, entry.name)
+        : await window.api.k8sResources(entry.context, namespace, 'pods');
+      const pod = entry.kind === 'Pod' ? pods.items.find((item) => item.name === entry.name) : pods.items[0];
+      const container = pod?.containers?.[0];
+      if (!pod || !container) {
+        showStatusRef.current(`No container is available for pod ${entry.name}.`, true);
+        setKubeWorkloadTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, loading: false, logsLoading: false, error: `No container is available for pod ${entry.name}.` } : tab));
+        return;
+      }
+      setKubeWorkloadTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, name: pod.name, namespace: pod.namespace, label: `logs · ${container}`, container } : tab));
+      const logs = await window.api.k8sPodLogs(entry.context, pod.namespace, pod.name, container);
+      kubeLogSnapshotsRef.current[id] = logs;
+      setKubeWorkloadTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, logs, loading: false, logsLoading: false } : tab));
+    } catch (error) {
+      showStatusRef.current(error instanceof Error ? error.message : String(error), true);
+    }
+  }, []);
+
+  const openDashboardKubeDetail = useCallback(async (entry: KubeActivityEntry) => {
+    setView('k8s');
+    setKubeError('');
+    const namespace = entry.namespace || 'default';
+    try {
+      if (entry.kind === 'Deployment') {
+        const id = `${namespace}/${entry.name}/dashboard-${Date.now()}`;
+        const pendingWorkload: KubeWorkloadTab = {
+          id, context: entry.context, name: entry.name, namespace, mode: 'deployment',
+          detail: null, pods: null, selectedPod: 0, loading: true, podsLoading: true,
+        };
+        setKubeWorkloadTabs((previous) => [...previous, pendingWorkload]);
+        setKubeActiveTab(id);
+        const [detail, pods] = await Promise.all([
+          window.api.k8sDeploymentDetail(entry.context, namespace, entry.name),
+          window.api.k8sDeploymentPods(entry.context, namespace, entry.name),
+        ]);
+        const workload: KubeWorkloadTab = {
+          id, context: entry.context, name: entry.name, namespace, mode: 'deployment',
+          detail, pods, selectedPod: 0, loading: false, podsLoading: false,
+        };
+        setKubeWorkloadTabs((previous) => previous.map((tab) => tab.id === id ? workload : tab));
+        return;
+      }
+      const id = `${entry.context}/${namespace}/${entry.name}/containers/dashboard-${Date.now()}`;
+      const pendingPodTab: KubeWorkloadTab = {
+        id, context: entry.context, name: entry.name, namespace,
+        mode: 'pod-containers', detail: null, containers: [], selectedContainer: 0, loading: true,
+      };
+      setKubeWorkloadTabs((previous) => [...previous, pendingPodTab]);
+      setKubeActiveTab(id);
+      const pods = await window.api.k8sResources(entry.context, namespace, 'pods');
+      const pod = pods.items.find((item) => item.name === entry.name);
+      if (!pod) {
+        showStatusRef.current(`Pod ${entry.name} was not found in ${entry.context}/${namespace}.`, true);
+        setKubeWorkloadTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, loading: false, error: `Pod ${entry.name} was not found.` } : tab));
+        return;
+      }
+      const podTab: KubeWorkloadTab = {
+        id, context: entry.context, name: pod.name, namespace: pod.namespace,
+        mode: 'pod-containers', detail: null, containers: pod.containers ?? [],
+        selectedContainer: 0, loading: false,
+      };
+      setKubeWorkloadTabs((previous) => previous.map((tab) => tab.id === id ? podTab : tab));
+    } catch (error) {
+      showStatusRef.current(error instanceof Error ? error.message : String(error), true);
     }
   }, []);
 
@@ -2109,6 +2199,21 @@ export function App() {
                 setView('detail');
               }
               break;
+            case 'o': {
+              const commit = allCommits[selectedCommit];
+              if (!repo || !commit) break;
+              window.api.getRemoteUrl(repo.path).then((remoteUrl) => {
+                if (!remoteUrl) {
+                  showStatusRef.current('No remote URL found for this repository.', true);
+                  return;
+                }
+                return window.api.getCommitUrl(remoteUrl, commit.hash).then((commitUrl) => {
+                  if (commitUrl) window.api.openUrl(commitUrl);
+                  else showStatusRef.current('Could not generate commit URL.', true);
+                });
+              }).catch((error) => showStatusRef.current(error instanceof Error ? error.message : String(error), true));
+              break;
+            }
             case 'b': case 'Escape':
               setView('list');
               break;
@@ -2120,6 +2225,20 @@ export function App() {
         }
         case 'detail': {
           switch (e.key) {
+            case 'o':
+              if (detail && repos[selectedRepo]) {
+                window.api.getRemoteUrl(repos[selectedRepo].path).then((remoteUrl) => {
+                  if (!remoteUrl) {
+                    showStatusRef.current('No remote URL found for this repository.', true);
+                    return;
+                  }
+                  return window.api.getCommitUrl(remoteUrl, detail.hash).then((commitUrl) => {
+                    if (commitUrl) window.api.openUrl(commitUrl);
+                    else showStatusRef.current('Could not generate commit URL.', true);
+                  });
+                }).catch((error) => showStatusRef.current(error instanceof Error ? error.message : String(error), true));
+              }
+              break;
             case 'b': case 'Escape':
               setView('commits');
               setDetail(null);
@@ -2406,11 +2525,9 @@ export function App() {
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
-  const filteredRepos = repos.filter((repo) => {
-    const matchesStatus = repoStatusFilter === 'all' || (repoStatusFilter === 'behind' ? repo.status === 'behind' : repo.status === 'error');
-    const matchesSearch = !repoSearchQuery || repo.name.toLowerCase().includes(repoSearchQuery.toLowerCase());
-    return matchesStatus && matchesSearch;
-  });
+  const filteredRepos = repoSearchQuery
+    ? repos.filter((repo) => repo.name.toLowerCase().includes(repoSearchQuery.toLowerCase()))
+    : repos;
 
   // ─── Config Save ─────────────────────────────────────────────────────────
 
@@ -2522,17 +2639,21 @@ export function App() {
             onSyncAll={() => syncAllRef.current()}
             onRefreshPRs={() => { if (cfg.token) fetchAllPRsRef.current('open', reposRef.current); }}
             onOpenRepositories={() => setView('list')}
-            onOpenPRs={() => handleChangeView('prs')}
+            onOpenPRs={(statusFilter) => { setPRStatusFilter(statusFilter ?? 'all'); void handleChangeView('prs'); }}
             onOpenKubernetes={() => handleChangeView('k8s')}
             onOpenSettings={() => setView('config')}
             onOpenWorkspace={() => selectWorkspace()}
-            onOpenRepo={(repo) => {
+            onOpenCommitList={(repo, commitHash) => {
+              const allCommits = [...repo.diffCommits, ...repo.latestCommits.map((commit) => ({ hash: commit.hash, message: commit.subject }))];
+              const selectedIndex = commitHash ? allCommits.findIndex((commit) => commit.hash === commitHash) : 0;
               setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
-              setView('list');
-              openRepoCommitInspector(repo);
+              setSelectedCommit(selectedIndex >= 0 ? selectedIndex : 0);
+              setDetail(null);
+              setView('commits');
             }}
             onOpenPRDetail={(pr) => { void openDashboardPRDetail(pr); }}
-            onOpenKubeDetail={() => handleChangeView('k8s')}
+            onOpenKubeDetail={(entry) => { void openDashboardKubeDetail(entry); }}
+            onOpenKubeLogs={(entry) => { void openDashboardKubeLogs(entry); }}
             onViewMetric={(metric) => {
               if (metric === 'pullRequests') {
                 setPRFilter('open');
@@ -2543,7 +2664,7 @@ export function App() {
                 return;
               }
               setRepoSearchQuery('');
-              setRepoStatusFilter(metric === 'behind' ? 'behind' : metric === 'errors' ? 'error' : 'all');
+              setRepoStatusFilter(metric === 'behind' ? 'notSynced' : metric === 'errors' ? 'error' : 'all');
               setView('list');
             }}
           />
@@ -2569,6 +2690,8 @@ export function App() {
             onSearchQueryChange={setRepoSearchQuery}
             ignoredRepoPaths={cfg.ignoredRepos ?? []}
             openPRCounts={openPRCounts}
+            statusFilter={repoStatusFilter}
+            onStatusFilterChange={setRepoStatusFilter}
             onToggleIgnoreRepo={(repo) => {
               const ignored = new Set(cfg.ignoredRepos ?? []);
               if (ignored.has(repo.path)) ignored.delete(repo.path);
@@ -2771,6 +2894,7 @@ export function App() {
             error={prError}
             selected={selectedPR}
             filter={prFilter}
+            statusFilter={prStatusFilter}
             hasMore={prAllRepos
               ? Object.values(prPagination).some((page) => page.hasMore)
               : Boolean(repos[selectedRepo] && prPagination[repos[selectedRepo]!.path]?.hasMore)}
@@ -2790,6 +2914,7 @@ export function App() {
                 fetchPRsForRepoRef.current(repos[selectedRepo].path, f);
               }
             }}
+            onStatusFilterChange={setPRStatusFilter}
             onSearch={searchPRByJiraKey}
             onReviewSearchResult={openSearchPRReview}
             onSelectPR={() => {
@@ -2913,6 +3038,36 @@ export function App() {
             onBack={() => { setView(reviewContext.returnView); setReviewJira(null); }}
           />
         );
+      case 'mapping':
+        return (
+          <MappingView
+            key={activeWorkspaceId ?? workspacePath}
+            repos={repos.filter((repo) => !(cfg.ignoredRepos ?? []).includes(repo.path))}
+            mappingTabs={cfg.deploymentMappingTabs ?? []}
+            legacyMappings={cfg.deploymentMappings ?? []}
+            preferredContext={cfg.mappingContext}
+            preferredTabId={cfg.activeDeploymentMappingTab}
+            editing={mappingEditing}
+            syncing={isSyncing}
+            onEdit={() => setMappingEditing(true)}
+            onCancel={() => setMappingEditing(false)}
+            onRefresh={() => { void syncAllRef.current(); }}
+            onPersist={(deploymentMappingTabs: DeploymentMappingTab[], activeDeploymentMappingTab: string) => {
+              const activeTab = deploymentMappingTabs.find((tab) => tab.id === activeDeploymentMappingTab);
+              const nextCfg = {
+                ...cfg,
+                deploymentMappingTabs,
+                activeDeploymentMappingTab,
+                deploymentMappings: deploymentMappingTabs.flatMap((tab) => tab.mappings),
+                mappingContext: activeTab?.context ?? cfg.mappingContext,
+              };
+              setCfg(nextCfg);
+              void (activeWorkspaceId
+                ? window.api.saveWorkspaceConfig(activeWorkspaceId, nextCfg)
+                : window.api.saveConfig(nextCfg));
+            }}
+          />
+        );
       case 'k8s':
         return (
           <K8sView
@@ -2929,6 +3084,7 @@ export function App() {
             onTabKindChange={handleKubeTabKindChange}
             onTabPodFilterToggle={handleKubeTabPodFilterToggle}
             onTabPodAgeFilterChange={handleKubeTabPodAgeFilterChange}
+            onTabPodStatusFilterChange={handleKubeTabPodStatusFilterChange}
             onTabWatchToggle={handleKubeTabWatchToggle}
             onTabWatchInterval={handleKubeTabWatchInterval}
             onRefreshTab={refreshKubeTab}

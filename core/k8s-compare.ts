@@ -36,10 +36,10 @@ export function summarizeKubePods(items: KubeResourceItem[]): KubePodStatusSumma
       || (normalized === 'Running' && !hasReadyCount)
     ) summary.notReady += 1;
     else if (normalized === 'Running' && ready === total) summary.running += 1;
-    else if (normalized === 'Succeeded') summary.running += 1;
+    else if (normalized === 'Succeeded') summary.succeeded += 1;
     else summary.notReady += 1;
     return summary;
-  }, { running: 0, error: 0, terminating: 0, notReady: 0, total: 0 });
+  }, { running: 0, succeeded: 0, error: 0, terminating: 0, notReady: 0, total: 0 });
 }
 
 function row(key: string, label: string, left: unknown, right: unknown): KubeDiffRow {

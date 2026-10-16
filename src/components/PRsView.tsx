@@ -24,11 +24,13 @@ interface PRsViewProps {
   error: string;
   selected: number;
   filter: 'open' | 'closed' | 'all';
+  statusFilter: 'all' | 'review' | 'conflicts' | 'approved';
   onSelect: (i: number) => void;
   onBack: () => void;
   onSelectPR: () => void;
   onOpenConfig: () => void;
   onFilterChange: (f: 'open' | 'closed' | 'all') => void;
+  onStatusFilterChange: (filter: 'all' | 'review' | 'conflicts' | 'approved') => void;
   onSearch: (query: string, onUpdate: (result: PRSearchResult) => void) => Promise<void>;
   onReviewSearchResult: (prs: PR[], jira: JiraIssue) => Promise<void>;
   hasMore: boolean;
@@ -65,15 +67,26 @@ function relativeDate(iso?: string): string {
   return value === 'now' ? 'just now' : value.replace(/^(\d+)([smhdw]|mo|y)$/, (_, amount, unit) => `${amount} ${({ s: 'second', m: 'minute', h: 'hour', d: 'day', w: 'week', mo: 'month', y: 'year' } as Record<string, string>)[unit]}${amount === '1' ? '' : 's'} ago`);
 }
 
-export function PRsView({ prs, loading, error, selected, filter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onSearch, onReviewSearchResult, hasMore, onLoadMore, searchState, onSearchStateChange, autoSearchQuery }: PRsViewProps) {
+function jiraKeyForPR(pr: PR): string {
+  return (pr.title + ' ' + pr.sourceBranch).match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0] ?? '';
+}
+
+export function PRsView({ prs, loading, error, selected, filter, statusFilter, onSelect, onBack, onSelectPR, onOpenConfig, onFilterChange, onStatusFilterChange, onSearch, onReviewSearchResult, hasMore, onLoadMore, searchState, onSearchStateChange, autoSearchQuery }: PRsViewProps) {
   const [searchQuery, setSearchQuery] = React.useState(() => searchState?.query ?? '');
   const [searching, setSearching] = React.useState(false);
   const [searchError, setSearchError] = React.useState('');
+  const [jiraFilter, setJiraFilter] = React.useState<'all' | 'linked' | 'unlinked'>('all');
   const [searchResult, setSearchResult] = React.useState<PRSearchResult | null>(() => searchState?.result ?? null);
   const [selectedSearchPR, setSelectedSearchPR] = React.useState(() => searchState?.selectedPR ?? 0);
   const [selectedSearchPRs, setSelectedSearchPRs] = React.useState<Set<string>>(() => searchState?.selectedPRs ?? new Set());
   const searchRunRef = React.useRef(0);
   const filterLabel = filter === 'open' ? 'Open' : filter === 'closed' ? 'Closed' : 'All';
+  const visiblePRs = prs.filter((pr) => {
+    const statusMatches = statusFilter === 'all' || (statusFilter === 'review' && !pr.approved && !pr.hasConflicts) || (statusFilter === 'conflicts' && pr.hasConflicts) || (statusFilter === 'approved' && pr.approved);
+    const jiraLinked = Boolean(jiraKeyForPR(pr));
+    const jiraMatches = jiraFilter === 'all' || (jiraFilter === 'linked' && jiraLinked) || (jiraFilter === 'unlinked' && !jiraLinked);
+    return statusMatches && jiraMatches;
+  });
 
   React.useEffect(() => {
     onSearchStateChange?.({ query: searchQuery, result: searchResult, selectedPR: selectedSearchPR, selectedPRs: selectedSearchPRs });
@@ -119,9 +132,9 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
         <div className="pr-list-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Pull Requests</span>
         <div style={{ flex: 1 }} />
-        <FilterTab label="Open" active={filter === 'open'} onClick={() => onFilterChange('open')} />
-        <FilterTab label="Closed" active={filter === 'closed'} onClick={() => onFilterChange('closed')} />
-        <FilterTab label="All" active={filter === 'all'} onClick={() => onFilterChange('all')} />
+        <div className="pr-filter-group"><FilterTab label="Open" active={filter === 'open'} onClick={() => onFilterChange('open')} /><FilterTab label="Closed" active={filter === 'closed'} onClick={() => onFilterChange('closed')} /><FilterTab label="All" active={filter === 'all'} onClick={() => onFilterChange('all')} /></div>
+        <label className="pr-filter-select-wrap"><select aria-label="Review filter" className="pr-filter-select" value={statusFilter} onChange={(event) => { onStatusFilterChange(event.target.value as typeof statusFilter); onSelect(0); }}><option value="all">All reviews</option><option value="review">Need review</option><option value="conflicts">Conflicts</option><option value="approved">Approved</option></select></label>
+        <label className="pr-filter-select-wrap"><select aria-label="Ticket link filter" className="pr-filter-select" value={jiraFilter} onChange={(event) => { setJiraFilter(event.target.value as typeof jiraFilter); onSelect(0); }}><option value="all">All tickets</option><option value="linked">Linked</option><option value="unlinked">Not linked</option></select></label>
         <form onSubmit={submitSearch} style={{ display: 'flex', gap: 6, width: 310, marginLeft: 8 }}>
           <input
             value={searchQuery}
@@ -129,7 +142,7 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
             placeholder="Search Jira key (e.g. NUVEI-123)"
             aria-label="Search PR by Jira ticket"
             disabled={searching}
-            style={{ flex: 1, minWidth: 0, padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-tertiary)', color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 12, outline: 'none' }}
+            style={{ flex: 1, minWidth: 0, height: 29, boxSizing: 'border-box', padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-tertiary)', color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 12, outline: 'none' }}
           />
           <button type="submit" disabled={loading || searching || !searchQuery.trim()} style={{ padding: '4px 10px', border: '1px solid var(--border-blue)', borderRadius: 6, background: 'var(--tint-blue)', color: 'var(--accent-blue)', cursor: loading || searching || !searchQuery.trim() ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 12, opacity: loading || searching || !searchQuery.trim() ? 0.55 : 1 }}>
             {searching ? 'Searching…' : 'Find'}
@@ -227,7 +240,7 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
           <div style={{ color: 'var(--accent-red)', fontSize: 14, textAlign: 'center', lineHeight: 1.6, maxWidth: 480 }}>{error}</div>
           {(error.toLowerCase().includes('token') || error.toLowerCase().includes('config') || error.toLowerCase().includes('settings')) && <button onClick={onOpenConfig} style={{ padding: '10px 24px', borderRadius: 8, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Open Settings</button>}
         </div>
-      ) : prs.length === 0 ? (
+      ) : visiblePRs.length === 0 ? (
         <div className="empty-state">
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M18 15h-6"/>
@@ -242,12 +255,13 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
           <div className="table-header">
             <div className="cell" style={{ width: 50, flexShrink: 0 }}>#</div>
             <div className="cell" style={{ flex: 3, minWidth: 0 }}>TITLE</div>
+            <div className="cell" style={{ width: 88, flexShrink: 0 }}>JIRA</div>
             <div className="cell" style={{ width: 74, flexShrink: 0 }}>STATE</div>
             <div className="cell" style={{ width: 44, flexShrink: 0, textAlign: 'center' }}>APRVD</div>
             <div className="cell" style={{ width: 66, flexShrink: 0, textAlign: 'right', paddingRight: 18 }}>AGE</div>
             <div className="cell" style={{ width: 120, flexShrink: 0 }}>AUTHOR</div>
           </div>
-          {prs.map((pr, i) => (
+          {visiblePRs.map((pr, i) => (
             <div
               key={`${pr.repoName}-${pr.number}`}
               className={`table-row ${i === selected ? 'selected' : ''}`}
@@ -256,6 +270,9 @@ export function PRsView({ prs, loading, error, selected, filter, onSelect, onBac
               <div className="cell pr-number" style={{ width: 50, flexShrink: 0 }}>#{pr.number}</div>
               <div className="cell pr-title" style={{ flex: 3, minWidth: 0, fontWeight: i === selected ? 600 : 400 }}>
                 {pr.title}
+              </div>
+              <div className="cell" style={{ width: 88, flexShrink: 0 }}>
+                {jiraKeyForPR(pr) ? <span className="pr-jira-badge">{jiraKeyForPR(pr)}</span> : <span className="pr-jira-unlinked">Not linked</span>}
               </div>
               <div className="cell" style={{ width: 74, flexShrink: 0 }}>
                 <span className={`pr-state ${pr.state.toLowerCase()}`}>{pr.state}</span>

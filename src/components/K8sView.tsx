@@ -25,6 +25,7 @@ interface K8sViewProps {
   onTabKindChange: (tabId: string, kind: string) => void;
   onTabPodFilterToggle: (tabId: string, category: string) => void;
   onTabPodAgeFilterChange: (tabId: string, ageFilter: string) => void;
+  onTabPodStatusFilterChange: (tabId: string, statusFilter: string) => void;
   onTabWatchToggle: (tabId: string, enabled: boolean) => void;
   onTabWatchInterval: (tabId: string, seconds: number) => void;
   onRefreshTab: (tabId: string) => void;
@@ -581,20 +582,22 @@ function podRowStyle(status: string, owner: string, selected: boolean): React.CS
   };
 }
 
-function PodStatusSummary({ summary, loading }: { summary?: KubePodStatusSummary; loading?: boolean }) {
-  const statuses = summary ? [
-    { key: 'running', label: 'Running pods', value: summary.running, color: 'var(--accent-green)' },
-    { key: 'error', label: 'Error pods', value: summary.error, color: 'var(--accent-red)' },
-    { key: 'terminating', label: 'Terminating pods', value: summary.terminating, color: 'var(--accent-blue)' },
-    { key: 'not-ready', label: 'Not-ready pods', value: summary.notReady, color: 'var(--accent-yellow)' },
-  ].filter((status) => status.value > 0 || (status.key === 'running' && summary.total > 0)) : [];
-  if (statuses.length === 0) return null;
+function PodStatusSummary({ summary, loading, filter = 'all', onFilterChange }: { summary?: KubePodStatusSummary; loading?: boolean; filter?: string; onFilterChange?: (filter: string) => void }) {
+  if (!summary) return null;
+  const statuses = [
+    { key: 'all', label: 'All pods', value: summary.total, color: 'var(--text-secondary)' },
+    { key: 'running', label: 'Running', value: summary.running, color: 'var(--accent-green)' },
+    { key: 'succeeded', label: 'Succeeded', value: summary.succeeded, color: 'var(--accent-cyan)' },
+    { key: 'error', label: 'Error', value: summary.error, color: 'var(--accent-red)' },
+    { key: 'terminating', label: 'Terminating', value: summary.terminating, color: 'var(--accent-blue)' },
+    { key: 'notReady', label: 'Not ready', value: summary.notReady, color: 'var(--accent-yellow)' },
+  ];
   return (
     <div className={`k8s-pod-status-summary${loading ? ' is-loading' : ''}`} aria-label="Pod status summary">
-      {statuses.map((status, index) => (
-        <span className="k8s-pod-status-item" key={status.key} title={String(status.value)} data-tooltip={String(status.value)}>
-          <span className="k8s-pod-status-dot" style={{ background: status.color, boxShadow: `0 0 0 2px color-mix(in srgb, ${status.color} 18%, transparent)`, animationDelay: `${index * 180}ms` }} />
-        </span>
+      {statuses.map((status) => (
+        <button type="button" className={`k8s-pod-status-item${filter === status.key ? ' is-active' : ''}`} key={status.key} title={`Show ${status.label.toLowerCase()} pods`} aria-pressed={filter === status.key} onClick={() => onFilterChange?.(status.key)}>
+          {status.key === 'all' ? <span className="k8s-pod-status-label">All</span> : <span className="k8s-pod-status-count" style={{ color: status.color }}>{status.value}</span>}
+        </button>
       ))}
     </div>
   );
@@ -803,12 +806,13 @@ function ResourceInspector({ item, kind, detail, description, loading, error, se
   );
 }
 
-function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onSilentRefresh, onSelect, onOpenWorkload, onOpenPod, onSelectContainer, onOpenContainerLogs, onClosePodDrilldown, onRowContextMenu, onViewResource }: {
+function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onSilentRefresh, onStatusFilterChange, onSelect, onOpenWorkload, onOpenPod, onSelectContainer, onOpenContainerLogs, onClosePodDrilldown, onRowContextMenu, onViewResource }: {
   tab: KubeContextTab;
   searchQuery: string;
   onNamespaceChange: (tabId: string, ns: string) => void;
   onKindChange: (tabId: string, kind: string) => void;
   onSilentRefresh: (tabId: string) => void;
+  onStatusFilterChange: (tabId: string, filter: string) => void;
   onSelect: (i: number) => void;
   onOpenWorkload: (i: number) => void;
   onOpenPod: (i: number) => void;
@@ -841,6 +845,15 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   const showPodFilter = tab.kind === 'pods';
   const filters = tab.podFilters ?? ['ReplicaSet'];
   const ageFilter = tab.podAgeFilter ?? 'all';
+  const statusFilter = tab.podStatusFilter ?? 'all';
+  const matchesStatus = (item: KubeResourceItem) => {
+    if (statusFilter === 'all') return true;
+    const summary = summarizeKubePods([item]);
+    return statusFilter === 'running' ? summary.running > 0
+      : statusFilter === 'succeeded' ? summary.succeeded > 0
+        : statusFilter === 'error' ? summary.error > 0
+          : statusFilter === 'terminating' ? summary.terminating > 0 : summary.notReady > 0;
+  };
   const visiblePods = (item: KubeResourceItem) => filters.includes(item.cells.owner ?? 'None') && podMatchesAgeFilter(item, ageFilter);
   const visiblePodStatus = tab.kind === 'pods'
     ? summarizeKubePods(tab.resources.items.filter(visiblePods))
@@ -851,7 +864,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   const query = searchQuery.trim().toLowerCase();
   const items = tab.resources.items
     .map((item, index) => ({ item, index }))
-    .filter(({ item }) => !showPodFilter || visiblePods(item))
+    .filter(({ item }) => !showPodFilter || (visiblePods(item) && matchesStatus(item)))
     .filter(({ item }) => !query || [item.name, ...Object.values(item.cells)].some((value) => value.toLowerCase().includes(query)));
   const viewResource = async (index: number) => {
     const item = tab.resources.items[index];
@@ -926,7 +939,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
             </select>
           </div>
         )}
-        <PodStatusSummary summary={visiblePodStatus} loading={tab.loading || tab.refreshing} />
+        {tab.kind === 'pods' && <PodStatusSummary summary={visiblePodStatus} loading={tab.loading || tab.refreshing} filter={statusFilter} onFilterChange={(filter) => onStatusFilterChange(tab.id, filter)} />}
         <div style={{ flex: 1, minWidth: 0, padding: '7px 16px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignContent: 'center', gap: 4, minHeight: 36 }}>
             {KUBE_RESOURCE_OPTIONS.map((option) => {
@@ -1574,7 +1587,7 @@ export function KubeDescribeDialog({ title, json, query, error, onQueryChange, o
 export function K8sView({
   contexts, contextTabs, activeTab, workloadTabs, compareTab, error, searchQuery, onSearchQueryChange,
   onOpenContextTab, onTabNamespaceChange, onTabKindChange, onTabPodFilterToggle,
-  onTabPodAgeFilterChange,
+  onTabPodAgeFilterChange, onTabPodStatusFilterChange,
   onTabWatchToggle, onTabWatchInterval, onRefreshTab, onSilentRefreshTab, onDescribeResource, onDeleteResource, onCopyResource, onViewResource, onRestartDeployment,
   onSelect, onOpenWorkload, onOpenPod, onSelectContextContainer, onOpenContextContainerLogs, onClosePodDrilldown, onToggleLogWatch, onRefreshLogs, onDownloadLogs, onClearLogs, onToggleLogWrap, onSelectWorkloadPod, onOpenPodLogs, onSelectWorkloadContainer, onOpenContainerLogs, onCompareContext, onAddCompareContext, onRemoveCompareSide,
   onActivateTab, onCloseTab, onRenameTab, onBack,
@@ -1739,6 +1752,7 @@ export function K8sView({
           onNamespaceChange={onTabNamespaceChange}
           onKindChange={onTabKindChange}
           onSilentRefresh={onSilentRefreshTab}
+          onStatusFilterChange={onTabPodStatusFilterChange}
           onViewResource={onViewResource}
           onRowContextMenu={(e, index) => setResourceMenu({ x: e.clientX, y: e.clientY, index })}
           onSelect={onSelect}

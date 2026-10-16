@@ -3,18 +3,19 @@ import type { View } from '../../core/types.js';
 
 interface AppNavProps {
   currentView: View;
-  onNavigate: (view: 'list' | 'prs' | 'review' | 'k8s') => void;
+  onNavigate: (view: 'list' | 'prs' | 'review' | 'k8s' | 'mapping') => void;
   onHome: () => void;
   onOpenSettings: () => void;
 }
 
-type NavItem = { view: 'list' | 'prs' | 'review' | 'k8s' | 'config'; label: string; icon: React.ReactNode };
+type NavItem = { view: 'list' | 'prs' | 'review' | 'k8s' | 'mapping' | 'config'; label: string; icon: React.ReactNode };
 
 const navItems: NavItem[] = [
   { view: 'list', label: 'Repositories', icon: <><path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /><circle cx="7" cy="7" r="1" /><circle cx="7" cy="12" r="1" /><circle cx="7" cy="17" r="1" /></> },
   { view: 'prs', label: 'Pull requests', icon: <><path d="M6 3v12" /><path d="M6 7h8a4 4 0 0 1 4 4v10" /><circle cx="6" cy="3" r="2" /><circle cx="6" cy="15" r="2" /><circle cx="18" cy="21" r="2" /></> },
   { view: 'review', label: 'AI review', icon: <><path d="M7 3h10a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2Z" /><path d="m8 10 2 2 5-5" /></> },
   { view: 'k8s', label: 'Kubernetes', icon: <><path d="m12 3 7.8 4.5v9L12 21l-7.8-4.5v-9L12 3Z" /><path d="m12 8 4 2.3v4.4l-4 2.3-4-2.3v-4.4L12 8Z" /><path d="M12 3v5M19.8 7.5 16 9.7M19.8 16.5 16 14.3M12 21v-4.7M4.2 16.5 8 14.3M4.2 7.5 8 9.7" /></> },
+  { view: 'mapping', label: 'Mapping', icon: <><path d="M4 6h6l2 2h8v10H4z" /><path d="M7 12h10M7 15h6" /><path d="m15 10 2 2-2 2" /></> },
   { view: 'config', label: 'Settings', icon: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .3 1.8l.1.1-2.8 2.8-.1-.1a1.65 1.65 0 0 0-1.8-.3 1.65 1.65 0 0 0-1 1.5v.2h-4v-.2a1.65 1.65 0 0 0-1-1.5 1.65 1.65 0 0 0-1.8.3l-.1.1-2.8-2.8.1-.1A1.65 1.65 0 0 0 4.7 15a1.65 1.65 0 0 0-1.5-1H3v-4h.2a1.65 1.65 0 0 0 1.5-1 1.65 1.65 0 0 0-.3-1.8l-.1-.1 2.8-2.8.1.1a1.65 1.65 0 0 0 1.8.3 1.65 1.65 0 0 0 1-1.5V2h4v.2a1.65 1.65 0 0 0 1 1.5 1.65 1.65 0 0 0 1.8-.3l.1-.1 2.8 2.8-.1.1a1.65 1.65 0 0 0-.3 1.8 1.65 1.65 0 0 0 1.5 1h.2v4h-.2a1.65 1.65 0 0 0-1.5 1Z" /></> },
 ];
 

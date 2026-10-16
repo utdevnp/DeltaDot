@@ -1,7 +1,7 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type RepoStatus = 'loading' | 'stale' | 'syncing' | 'synced' | 'behind' | 'error';
-export type View = 'home' | 'list' | 'commits' | 'detail' | 'config' | 'prs' | 'prdetail' | 'review' | 'k8s';
+export type View = 'home' | 'list' | 'commits' | 'detail' | 'config' | 'prs' | 'prdetail' | 'review' | 'k8s' | 'mapping';
 export type InputMode = 'none' | 'search' | 'command';
 export type Provider = 'github' | 'gitlab' | 'bitbucket';
 export type TaskProvider = 'none' | 'jira' | 'clickup' | 'github';
@@ -42,6 +42,27 @@ export interface AppConfig {
   theme: ThemeMode;
   defaultView?: 'list' | 'prs';
   ignoredRepos?: string[];
+  deploymentMappings?: DeploymentMapping[];
+  mappingContext?: string;
+  deploymentMappingTabs?: DeploymentMappingTab[];
+  activeDeploymentMappingTab?: string;
+}
+
+export interface DeploymentMapping {
+  id: string;
+  context: string;
+  namespace: string;
+  deployment: string;
+  repoPath: string;
+  imageVersionOverride?: string;
+  noRepo?: boolean;
+}
+
+export interface DeploymentMappingTab {
+  id: string;
+  name: string;
+  context: string;
+  mappings: DeploymentMapping[];
 }
 
 export interface CommitEntry {
@@ -394,6 +415,7 @@ export interface KubeContextTab {
   resources: KubeResourceList; // table for the selected kind in the current namespace
   podFilters: string[]; // pods only: subset of owner kinds, combinable
   podAgeFilter: string; // pods only: age preset key, e.g. '10m' or 'older'
+  podStatusFilter?: 'all' | 'running' | 'succeeded' | 'error' | 'terminating' | 'notReady';
   watch: boolean; // live watch mode: poll the current resource table
   watchInterval: number; // seconds between polls (default 2)
   selected: number;
@@ -406,6 +428,7 @@ export interface KubeContextTab {
 
 export interface KubePodStatusSummary {
   running: number;
+  succeeded: number;
   error: number;
   terminating: number;
   notReady: number;

@@ -4,6 +4,7 @@ import type { CommitDetail, CommitFile } from '../../core/types.js';
 interface DetailViewProps {
   detail: CommitDetail;
   onBack: () => void;
+  embedded?: boolean;
 }
 
 function DiffLine({ line }: { line: string }) {
@@ -78,7 +79,7 @@ function DiffLine({ line }: { line: string }) {
   );
 }
 
-function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpanded: boolean; onToggle: () => void }) {
+function FilePanel({ file, isExpanded, onToggle, compact = false }: { file: CommitFile; isExpanded: boolean; onToggle: () => void; compact?: boolean }) {
   const totalChanges = file.additions + file.deletions;
   const barWidth = 80;
   const addWidth = totalChanges > 0 ? (file.additions / totalChanges) * barWidth : 0;
@@ -96,8 +97,8 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
-          padding: '8px 12px',
+          gap: compact ? 6 : 10,
+          padding: compact ? '5px 7px' : '8px 12px',
           background: 'var(--bg-tertiary)',
           cursor: 'pointer',
           userSelect: 'none',
@@ -106,7 +107,7 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
         onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
       >
         {/* Status icon */}
-        <span style={{ flexShrink: 0, fontSize: 12, lineHeight: 1 }}>
+        <span style={{ flexShrink: 0, fontSize: compact ? 10 : 12, lineHeight: 1 }}>
           {file.status === 'added' ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" strokeWidth="2">
               <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -127,7 +128,7 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
         <span style={{
           flex: 1,
           fontFamily: 'var(--font-mono)',
-          fontSize: 13,
+          fontSize: compact ? 11 : 13,
           color: 'var(--text-primary)',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -138,8 +139,8 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
 
         {/* Change bar */}
         <div style={{
-          width: barWidth,
-          height: 10,
+          width: compact ? 58 : barWidth,
+          height: compact ? 7 : 10,
           borderRadius: 5,
           background: 'var(--bg-primary)',
           overflow: 'hidden',
@@ -161,14 +162,14 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
         </div>
 
         {/* Counts */}
-        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+        <span style={{ fontSize: compact ? 9 : 11, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
           {file.additions > 0 && <span style={{ color: 'var(--accent-green)' }}>+{file.additions}</span>}
           {file.additions > 0 && file.deletions > 0 && <span style={{ color: 'var(--text-dim)' }}> </span>}
           {file.deletions > 0 && <span style={{ color: 'var(--accent-red)' }}>-{file.deletions}</span>}
         </span>
 
         {/* Expand icon */}
-        <span style={{ color: 'var(--text-dim)', fontSize: 10, transition: 'transform 0.15s', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+        <span style={{ color: 'var(--text-dim)', fontSize: compact ? 8 : 10, transition: 'transform 0.15s', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
           ▶
         </span>
       </div>
@@ -200,7 +201,7 @@ function FilePanel({ file, isExpanded, onToggle }: { file: CommitFile; isExpande
   );
 }
 
-export function DetailView({ detail, onBack }: DetailViewProps) {
+export function DetailView({ detail, onBack, embedded = false }: DetailViewProps) {
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [showAllDiffs, setShowAllDiffs] = useState(false);
 
@@ -227,7 +228,7 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
         zIndex: 10,
         background: 'var(--bg-secondary)',
         borderBottom: '1px solid var(--border)',
-        padding: '10px 16px',
+        padding: embedded ? '8px 12px' : '10px 16px',
         display: 'flex',
         alignItems: 'center',
         gap: 12,
@@ -252,12 +253,12 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
         }}>
           {detail.hash.slice(0, 7)}
         </span>
-        <button className="back-btn" onClick={onBack}>←</button>
+        {!embedded && <button className="back-btn" onClick={onBack}>←</button>}
       </div>
 
       {/* Meta section */}
       <div style={{
-        padding: '12px 16px',
+        padding: embedded ? '10px 12px' : '12px 16px',
         display: 'flex',
         gap: 20,
         flexWrap: 'wrap',
@@ -286,7 +287,7 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
       {/* Body (commit message) */}
       {detail.body && (
         <div style={{
-          margin: '12px 16px',
+          margin: embedded ? '6px 12px 3px' : '12px 16px',
           padding: '10px 14px',
           background: 'var(--bg-tertiary)',
           borderRadius: 6,
@@ -303,34 +304,38 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
 
       {/* File list + diffs */}
       {files.length > 0 && (
-        <div style={{ padding: '0 16px 16px' }}>
+        <div style={{ padding: embedded ? '6px 12px 12px' : '0 16px 16px' }}>
           {/* Summary bar */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 10,
+            gap: 3,
+            minHeight: 22,
+            padding: '1px 4px',
+            marginBottom: 2,
+            border: '1px solid var(--border)',
+            borderRadius: 5,
+            background: 'var(--bg-tertiary)',
           }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 10, fontWeight: 650, letterSpacing: '0.25px', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
               Files Changed ({files.length})
             </div>
+            <span style={{ font: '9px var(--font-mono)', color: 'var(--accent-green)' }}>+{totalAdditions}</span>
+            <span style={{ font: '9px var(--font-mono)', color: 'var(--accent-red)' }}>-{totalDeletions}</span>
             <button
+              type="button"
+              className="detail-action-btn secondary"
               onClick={() => {
                 const allExpanded = expandedFiles.size === files.length;
                 setExpandedFiles(new Set(allExpanded ? [] : files.map((f) => f.path)));
               }}
               style={{
-                padding: '4px 12px',
-                borderRadius: 4,
-                background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border)',
-                color: 'var(--text-secondary)',
-                fontSize: 12,
-                cursor: 'pointer',
-                fontFamily: 'inherit',
+                minHeight: 21,
+                padding: '2px 7px',
+                fontSize: 9,
               }}
             >
-              {expandedFiles.size === files.length ? 'Collapse All' : 'Expand All'}
+              {expandedFiles.size === files.length ? 'Collapse all' : 'Expand all'}
             </button>
           </div>
 
@@ -365,6 +370,7 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
               key={file.path}
               file={file}
               isExpanded={expandedFiles.has(file.path)}
+              compact={embedded}
               onToggle={() => toggleFile(file.path)}
             />
           ))}
@@ -374,7 +380,7 @@ export function DetailView({ detail, onBack }: DetailViewProps) {
       {/* Stat (fallback) */}
       {files.length === 0 && detail.stat && (
         <div style={{
-          margin: '0 16px 16px',
+          margin: embedded ? '0 12px 12px' : '0 16px 16px',
           padding: '10px 14px',
           background: 'var(--bg-secondary)',
           borderRadius: 6,

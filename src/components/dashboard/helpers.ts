@@ -9,30 +9,57 @@ export function contextColor(context: string): string {
   return CONTEXT_COLORS[hash % CONTEXT_COLORS.length] ?? 'var(--text-secondary)';
 }
 
-function healthFor(kind: KubeActivityEntry['kind'], item: KubeResourceItem): { healthy: boolean; reason: string } {
+function healthFor(kind: KubeActivityEntry['kind'], item: KubeResourceItem): { healthy: boolean; pending: boolean; reason: string } {
   if (kind === 'Pod') {
     const status = item.cells.status || 'Unknown';
     const ready = item.cells.ready || '';
     const [readyCount, containerCount] = ready.split('/').map(Number);
-    const healthy = status === 'Running' && (!containerCount || readyCount === containerCount);
-    return { healthy, reason: healthy ? 'Healthy' : status === 'Running' ? `${ready || 'Unknown'} containers ready` : status };
+    // Completed Job Pods are intentionally 0/1 because terminated containers
+    // are no longer ready. Their lifecycle status still represents success.
+    if (status === 'Succeeded') return { healthy: true, pending: false, reason: 'Completed successfully' };
+    const pending = status === 'Pending' || status.startsWith('Init:');
+    // Missing or invalid container counts must not become a false positive.
+    const healthy = status === 'Running'
+      && Number.isFinite(readyCount)
+      && Number.isFinite(containerCount)
+      && containerCount > 0
+      && readyCount === containerCount;
+    return { healthy, pending, reason: healthy ? 'Healthy' : pending ? status : status === 'Running' ? `${ready || 'Unknown'} containers ready` : status };
   }
 
   const ready = item.cells.ready || '0/0';
   const [readyCount, replicaCount] = ready.split('/').map(Number);
-  const healthy = Number.isFinite(readyCount) && Number.isFinite(replicaCount) && readyCount === replicaCount;
-  return { healthy, reason: healthy ? 'Healthy' : `${ready} replicas ready` };
+  const availableCount = Number(item.cells.available);
+  const updatedCount = Number(item.cells.updated);
+  const hasReplicaTarget = Number.isFinite(replicaCount);
+  const healthy = Number.isFinite(readyCount)
+    && hasReplicaTarget
+    && readyCount === replicaCount
+    && (!Number.isFinite(availableCount) || availableCount === replicaCount)
+    && (!Number.isFinite(updatedCount) || updatedCount === replicaCount);
+  // Deployments with a replica mismatch are health issues, not a separate
+  // pending state; keep them visible in the unhealthy list.
+  const pending = false;
+  const reason = healthy
+    ? 'Healthy'
+    : `${ready} replicas ready${Number.isFinite(availableCount) && availableCount < replicaCount ? `, ${availableCount} available` : ''}`;
+  return { healthy, pending, reason };
 }
 
-export function toKubeActivityEntry(context: string, kind: KubeActivityEntry['kind'], item: KubeResourceItem): KubeActivityEntry {
+export function toKubeActivityEntry(context: string, kind: KubeActivityEntry['kind'], item: KubeResourceItem, cluster?: string): KubeActivityEntry {
   const health = healthFor(kind, item);
   return {
     context,
+    cluster,
     kind,
     name: item.name,
     namespace: item.namespace,
     updatedAt: item.updatedAt || item.cells.age || '',
     ...health,
+    details: {
+      ...item.cells,
+      ...(item.containerStatuses ? { containers: Object.entries(item.containerStatuses).map(([name, status]) => `${name}: ${status}`).join(', ') } : {}),
+    },
   };
 }
 
