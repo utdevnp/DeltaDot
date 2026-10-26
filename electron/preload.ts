@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { homedir } from 'os';
-import type { AppConfig, RepoState, CacheFile, Provider, CommitDetail, PRDetail, PRPage, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceKind, KubeResourceList } from '../core/types.js';
+import type { AppConfig, RepoState, RepoGitInfo, CacheFile, Provider, CommitDetail, PRDetail, PRPage, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceKind, KubeResourceList, LocalChangesSnapshot, ForceFetchPreflight, ForceFetchProgress } from '../core/types.js';
 
 export interface DeltaDotAPI {
   homeDir: string;
@@ -12,13 +12,23 @@ export interface DeltaDotAPI {
   loadConfig: () => Promise<Partial<AppConfig>>;
   saveConfig: (cfg: AppConfig) => Promise<void>;
   getConfig: () => Promise<AppConfig | null>;
-  syncOneRepo: (repoPath: string, base: string, release: string) => Promise<RepoState>;
+  syncOneRepo: (repoPath: string, base: string, release: string, fetchMode?: 'all' | 'origin') => Promise<RepoState>;
   syncAllRepos: (repoPaths: string[], base: string, release: string) => Promise<RepoState[]>;
+  getLocalChanges: (repoPath: string) => Promise<LocalChangesSnapshot>;
+  getRepoGitInfo: (repoPath: string) => Promise<RepoGitInfo>;
+  countCommitsSinceTag: (repoPath: string, branch: string) => Promise<number | null>;
+  removeRepoFolder: (repoPath: string) => Promise<void>;
+  inspectForceFetch: (repoPath: string) => Promise<ForceFetchPreflight>;
+  forceReplaceRepo: (operationId: string, repoPath: string, remoteUrl: string, base: string, release: string, onProgress: (progress: ForceFetchProgress) => void) => Promise<RepoState>;
+  discardLocalFile: (repoPath: string, path: string, untracked: boolean) => Promise<LocalChangesSnapshot>;
+  discardAllLocalChanges: (repoPath: string) => Promise<void>;
+  fetchRepoTags: (repoPath: string) => Promise<void>;
+  commitLocalChanges: (repoPath: string, paths: string[], message: string) => Promise<string>;
   fetchCommitDetail: (repoPath: string, hash: string) => Promise<CommitDetail>;
   fetchBranchCommits: (repoPath: string, branch: string) => Promise<import('../core/types.js').LatestCommit[]>;
   getRemoteUrl: (repoPath: string) => Promise<string>;
   getRemoteOwnerRepo: (repoPath: string) => Promise<{ owner: string; repo: string } | null>;
-  fetchPRs: (owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number) => Promise<PRPage>;
+  fetchPRs: (owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number, sourceBranch?: string, targetBranch?: string) => Promise<PRPage>;
   fetchPRDetail: (owner: string, repo: string, prNumber: number, provider: Provider, token: string) => Promise<PRDetail>;
   createPRComment: (owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => Promise<string>;
   approvePR: (owner: string, repo: string, prNumber: number, provider: Provider, token: string, body: string) => Promise<void>;
@@ -39,7 +49,7 @@ export interface DeltaDotAPI {
   getPRsUrl: (remoteUrl: string) => Promise<string>;
   getCommitUrl: (remoteUrl: string, hash: string) => Promise<string>;
   selectWorkspace: () => Promise<string | null>;
-  cloneRepo: (url: string, workspacePath: string) => Promise<{ success: boolean; path?: string; name?: string; error?: string }>;
+  cloneRepo: (url: string, workspacePath: string, override?: boolean) => Promise<{ success: boolean; path?: string; name?: string; error?: string }>;
   onSyncProgress: (callback: (progress: { done: number; total: number }) => void) => () => void;
   loadWorkspaces: () => Promise<Workspace[]>;
   loadActiveWorkspaceId: () => Promise<string | null>;
@@ -79,13 +89,30 @@ const api: DeltaDotAPI = {
   loadConfig: () => ipcRenderer.invoke('load-config'),
   saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
   getConfig: () => ipcRenderer.invoke('get-config'),
-  syncOneRepo: (repoPath, base, release) => ipcRenderer.invoke('sync-one-repo', repoPath, base, release),
+  syncOneRepo: (repoPath, base, release, fetchMode) => ipcRenderer.invoke('sync-one-repo', repoPath, base, release, fetchMode),
   syncAllRepos: (repoPaths, base, release) => ipcRenderer.invoke('sync-all-repos', repoPaths, base, release),
+  getLocalChanges: (repoPath) => ipcRenderer.invoke('get-local-changes', repoPath),
+  getRepoGitInfo: (repoPath) => ipcRenderer.invoke('get-repo-git-info', repoPath),
+  countCommitsSinceTag: (repoPath, branch) => ipcRenderer.invoke('count-commits-since-tag', repoPath, branch),
+  removeRepoFolder: (repoPath) => ipcRenderer.invoke('remove-repo-folder', repoPath),
+  inspectForceFetch: (repoPath) => ipcRenderer.invoke('inspect-force-fetch', repoPath),
+  forceReplaceRepo: (operationId, repoPath, remoteUrl, base, release, onProgress) => {
+    const progressHandler = (_event: any, eventOperationId: string, progress: ForceFetchProgress) => {
+      if (eventOperationId === operationId) onProgress(progress);
+    };
+    ipcRenderer.on('force-fetch-progress', progressHandler);
+    return ipcRenderer.invoke('force-replace-repo', operationId, repoPath, remoteUrl, base, release)
+      .finally(() => ipcRenderer.removeListener('force-fetch-progress', progressHandler));
+  },
+  discardLocalFile: (repoPath, path, untracked) => ipcRenderer.invoke('discard-local-file', repoPath, path, untracked),
+  discardAllLocalChanges: (repoPath) => ipcRenderer.invoke('discard-all-local-changes', repoPath),
+  fetchRepoTags: (repoPath) => ipcRenderer.invoke('fetch-repo-tags', repoPath),
+  commitLocalChanges: (repoPath, paths, message) => ipcRenderer.invoke('commit-local-changes', repoPath, paths, message),
   fetchCommitDetail: (repoPath, hash) => ipcRenderer.invoke('fetch-commit-detail', repoPath, hash),
   fetchBranchCommits: (repoPath, branch) => ipcRenderer.invoke('fetch-branch-commits', repoPath, branch),
   getRemoteUrl: (repoPath) => ipcRenderer.invoke('get-remote-url', repoPath),
   getRemoteOwnerRepo: (repoPath) => ipcRenderer.invoke('get-remote-owner-repo', repoPath),
-  fetchPRs: (owner, repo, provider, token, repoName, state, page, pageSize) => ipcRenderer.invoke('fetch-prs', owner, repo, provider, token, repoName, state, page, pageSize),
+  fetchPRs: (owner, repo, provider, token, repoName, state, page, pageSize, sourceBranch, targetBranch) => ipcRenderer.invoke('fetch-prs', owner, repo, provider, token, repoName, state, page, pageSize, sourceBranch, targetBranch),
   fetchPRDetail: (owner, repo, prNumber, provider, token) => ipcRenderer.invoke('fetch-pr-detail', owner, repo, prNumber, provider, token),
   createPRComment: (owner, repo, prNumber, provider, token, body) => ipcRenderer.invoke('create-pr-comment', owner, repo, prNumber, provider, token, body),
   approvePR: (owner, repo, prNumber, provider, token, body) => ipcRenderer.invoke('approve-pr', owner, repo, prNumber, provider, token, body),
@@ -117,7 +144,7 @@ const api: DeltaDotAPI = {
   getPRsUrl: (remoteUrl) => ipcRenderer.invoke('get-prs-url', remoteUrl),
   getCommitUrl: (remoteUrl, hash) => ipcRenderer.invoke('get-commit-url', remoteUrl, hash),
   selectWorkspace: () => ipcRenderer.invoke('select-workspace'),
-  cloneRepo: (url, workspacePath) => ipcRenderer.invoke('clone-repo', url, workspacePath),
+  cloneRepo: (url, workspacePath, override) => ipcRenderer.invoke('clone-repo', url, workspacePath, override),
   onSyncProgress: (callback) => {
     const handler = (_event: any, progress: { done: number; total: number }) => callback(progress);
     ipcRenderer.on('sync-progress', handler);

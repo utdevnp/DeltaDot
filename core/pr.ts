@@ -1,5 +1,6 @@
 import { run } from './git.js';
 import type { PRDetail, PRPage, Provider } from './types.js';
+import type { Fetcher } from './services/pr/shared.js';
 import { timeAgo } from './utils.js';
 import { fetchPRsByProvider, fetchPRDetailByProvider, createPRCommentByProvider, approvePRByProvider } from './services/api.js';
 
@@ -38,8 +39,11 @@ export async function fetchPRs(
   state?: string,
   page?: number,
   pageSize?: number,
+  sourceBranch?: string,
+  targetBranch?: string,
+  fetcher?: Fetcher,
 ): Promise<PRPage> {
-  return fetchPRsByProvider(owner, repo, provider, token, repoName, state, page, pageSize);
+  return fetchPRsByProvider(owner, repo, provider, token, repoName, state, page, pageSize, sourceBranch, targetBranch, fetcher);
 }
 
 export async function fetchPRDetail(

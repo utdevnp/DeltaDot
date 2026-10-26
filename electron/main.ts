@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
-import { join, dirname, resolve } from 'path';
+import { app, BrowserWindow, ipcMain, shell, dialog, net } from 'electron';
+import { join, dirname, resolve, basename, relative, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
-import { writeFile } from 'fs/promises';
+import { execFileSync } from 'child_process';
+import { writeFile, mkdtemp, rename, rm, lstat, realpath } from 'fs/promises';
 import {
   loadGlobalConfig,
   saveGlobalConfig,
@@ -20,13 +20,15 @@ import {
   loadKubeContext,
   saveKubeContext,
 } from '../core/config.js';
-import { analyzeRepo, fetchBranchCommits, fetchCommitDetail, run } from '../core/git.js';
+import { analyzeRepo, countCommitsSinceTag, fetchBranchCommits, fetchCommitDetail, getRepoGitInfo, run } from '../core/git.js';
+import { commitLocalChanges, discardAllLocalChanges, discardLocalFile, fetchRepoTags, getLocalChanges } from '../core/local-changes.js';
+import { forceReplaceRepo } from '../core/force-fetch.js';
 import { getRemoteUrl, getCompareUrl, getPRsUrl, getCommitUrl } from '../core/remote.js';
 import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, approvePR, detectProviderFromRemote } from '../core/pr.js';
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
 import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, streamKubePodLogs, getKubeResources, restartKubeDeployment, restartAllKubeDeployments, deleteKubeJob, deleteKubeResource, describeKubeResource } from '../core/k8s.js';
-import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace, KubeResourceKind } from '../core/types.js';
+import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace, KubeResourceKind, ForceFetchPreflight } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -137,16 +139,27 @@ ipcMain.handle('select-workspace', async () => {
   return result.filePaths[0];
 });
 
-ipcMain.handle('clone-repo', async (_event, cloneUrl: string, workspacePath: string) => {
+ipcMain.handle('clone-repo', async (_event, cloneUrl: string, workspacePath: string, override = false) => {
+  let tempRoot: string | null = null;
+  let keepRecoveryCopy = false;
   try {
-    // Extract repo name from URL — works for both HTTPS and SSH
-    const normalizedUrl = cloneUrl.replace(/\.git$/, '');
-    const repoName = normalizedUrl.split('/').pop()?.split(':').pop() || 'repo';
-    const dest = join(workspacePath, repoName);
+    const normalizedUrl = cloneUrl.trim().replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
+    const repoName = normalizedUrl.split(/[/:]/).pop() || 'repo';
+    if (repoName === '.' || repoName === '..' || repoName !== basename(repoName)) throw new Error('Could not determine a safe repository folder name from this URL.');
+    const workspace = resolve(workspacePath);
+    const dest = join(workspace, repoName);
+    if (resolve(dirname(dest)) !== workspace) throw new Error('The clone destination must be inside the selected workspace.');
+    let destinationExists = false;
+    try { await lstat(dest); destinationExists = true; }
+    catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
+    if (destinationExists && !override) throw new Error(`A folder named "${repoName}" already exists. Enable Override existing repository to replace it with a clean clone.`);
+
+    tempRoot = await mkdtemp(join(workspace, '.deltadot-clone-'));
+    const cloneTarget = join(tempRoot, repoName);
     // Use GIT_SSH_COMMAND to auto-accept new host keys (non-interactive)
     const gitSshCmd = process.env.GIT_SSH_COMMAND || 'ssh -o StrictHostKeyChecking=accept-new';
-    execSync(`git clone "${cloneUrl}" "${dest}"`, {
-      cwd: workspacePath,
+    execFileSync('git', ['clone', cloneUrl, cloneTarget], {
+      cwd: workspace,
       encoding: 'utf8',
       timeout: 120000, // 2 min timeout
       env: {
@@ -154,6 +167,21 @@ ipcMain.handle('clone-repo', async (_event, cloneUrl: string, workspacePath: str
         GIT_SSH_COMMAND: gitSshCmd,
       },
     });
+    if (destinationExists) {
+      const recoveryPath = join(tempRoot, `${repoName}-previous`);
+      await rename(dest, recoveryPath);
+      try { await rename(cloneTarget, dest); }
+      catch (swapError) {
+        try { await rename(recoveryPath, dest); }
+        catch (restoreError) {
+          keepRecoveryCopy = true;
+          throw new Error(`Could not install the clean clone. The previous repository is preserved at ${recoveryPath}. ${String(restoreError)}`);
+        }
+        throw swapError;
+      }
+    } else {
+      await rename(cloneTarget, dest);
+    }
     return { success: true, path: dest, name: repoName };
   } catch (err: any) {
     const msg = err?.stderr?.toString() || err?.message || String(err);
@@ -163,6 +191,8 @@ ipcMain.handle('clone-repo', async (_event, cloneUrl: string, workspacePath: str
       .replace(/^Cloning into.*?\n/i, '')
       .trim();
     return { success: false, error: cleaned };
+  } finally {
+    if (tempRoot && !keepRecoveryCopy) await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 });
 
@@ -191,14 +221,64 @@ ipcMain.handle('save-config', async (_event, cfg: AppConfig) => {
 
 ipcMain.handle('get-config', () => currentConfig);
 
-ipcMain.handle('sync-one-repo', async (_event, repoPath: string, base: string, release: string) => {
-  const result = await analyzeRepo(repoPath, base, release);
+ipcMain.handle('sync-one-repo', async (_event, repoPath: string, base: string, release: string, fetchMode: 'all' | 'origin' = 'all') => {
+  const result = await analyzeRepo(repoPath, base, release, fetchMode);
   // Update in-memory list
   const idx = currentRepos.findIndex((r) => r.path === repoPath);
   if (idx !== -1) currentRepos[idx] = result;
   else currentRepos.push(result);
   return result;
 });
+
+ipcMain.handle('get-local-changes', (_event, repoPath: string) => getLocalChanges(repoPath));
+ipcMain.handle('get-repo-git-info', (_event, repoPath: string) => getRepoGitInfo(repoPath));
+ipcMain.handle('count-commits-since-tag', (_event, repoPath: string, branch: string) => countCommitsSinceTag(repoPath, branch));
+ipcMain.handle('remove-repo-folder', async (_event, repoPath: string) => {
+  if (!currentConfig?.workspace) throw new Error('No active workspace is configured.');
+  const workspaceRoot = await realpath(resolve(currentConfig.workspace));
+  const target = await realpath(resolve(repoPath));
+  const pathFromWorkspace = relative(workspaceRoot, target);
+  if (!pathFromWorkspace || pathFromWorkspace === '..' || pathFromWorkspace.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(pathFromWorkspace)) {
+    throw new Error('Only a repository folder inside the active workspace can be removed.');
+  }
+  const gitRoot = await realpath(await run('git rev-parse --show-toplevel', target));
+  if (gitRoot !== target) throw new Error('The selected folder is not the root of a Git repository.');
+  await rm(target, { recursive: true, force: false });
+  currentRepos = currentRepos.filter((repo) => repo.path !== repoPath);
+});
+ipcMain.handle('inspect-force-fetch', async (_event, repoPath: string): Promise<ForceFetchPreflight> => {
+  let exists = false;
+  let remoteUrl = '';
+  try {
+    const info = await lstat(resolve(repoPath));
+    if (!info.isDirectory()) return { exists: false, remoteUrl: '', files: [], commitsAhead: null, aheadCommits: [], error: 'The repository path is not a directory.' };
+    exists = true;
+    await run('git rev-parse --is-inside-work-tree', repoPath);
+    remoteUrl = await run('git remote get-url origin', repoPath);
+    if (!remoteUrl) return { exists: true, remoteUrl: '', files: [], commitsAhead: null, aheadCommits: [], error: 'No origin remote is configured.' };
+    const local = await getLocalChanges(repoPath);
+    return { exists: true, remoteUrl, files: local.files, commitsAhead: local.commitsAhead, aheadCommits: local.aheadCommits };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return { exists, remoteUrl, files: [], commitsAhead: null, aheadCommits: [], error };
+  }
+});
+ipcMain.handle('force-replace-repo', async (event, operationId: string, repoPath: string, remoteUrl: string, base: string, release: string) => {
+  const result = await forceReplaceRepo(repoPath, remoteUrl, base, release, (progress) => {
+    event.sender.send('force-fetch-progress', operationId, progress);
+  });
+  const idx = currentRepos.findIndex((repo) => repo.path === repoPath);
+  if (idx >= 0) currentRepos[idx] = result;
+  else currentRepos.push(result);
+  return result;
+});
+ipcMain.handle('discard-local-file', async (_event, repoPath: string, path: string, untracked: boolean) => {
+  await discardLocalFile(repoPath, path, untracked);
+  return getLocalChanges(repoPath);
+});
+ipcMain.handle('discard-all-local-changes', (_event, repoPath: string) => discardAllLocalChanges(repoPath));
+ipcMain.handle('fetch-repo-tags', (_event, repoPath: string) => fetchRepoTags(repoPath));
+ipcMain.handle('commit-local-changes', (_event, repoPath: string, paths: string[], message: string) => commitLocalChanges(repoPath, paths, message));
 
 ipcMain.handle('sync-all-repos', async (_event, repoPaths: string[], base: string, release: string) => {
   const total = repoPaths.length;
@@ -257,8 +337,8 @@ ipcMain.handle('get-remote-owner-repo', async (_event, repoPath: string) => {
   return getRemoteOwnerRepo(repoPath);
 });
 
-ipcMain.handle('fetch-prs', async (_event, owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number) => {
-  return fetchPRs(owner, repo, provider, token, repoName, state, page, pageSize);
+ipcMain.handle('fetch-prs', async (_event, owner: string, repo: string, provider: Provider, token: string, repoName?: string, state?: string, page?: number, pageSize?: number, sourceBranch?: string, targetBranch?: string) => {
+  return fetchPRs(owner, repo, provider, token, repoName, state, page, pageSize, sourceBranch, targetBranch, net.fetch);
 });
 
 ipcMain.handle('fetch-pr-detail', async (_event, owner: string, repo: string, prNumber: number, provider: Provider, token: string) => {

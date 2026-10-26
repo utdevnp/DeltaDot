@@ -55,6 +55,7 @@ export interface DeploymentMapping {
   deployment: string;
   repoPath: string;
   imageVersionOverride?: string;
+  baseBranch?: string;
   noRepo?: boolean;
 }
 
@@ -63,6 +64,7 @@ export interface DeploymentMappingTab {
   name: string;
   context: string;
   mappings: DeploymentMapping[];
+  deploymentSnapshot?: KubeDeploymentSummary[];
 }
 
 export interface CommitEntry {
@@ -115,7 +117,61 @@ export interface RepoState {
   currentBranch: string;
   error: string | null;
   missingRelease?: boolean;
+  localChangesCount?: number;
+  localCommitsCount?: number | null;
+  fetchMode?: 'all' | 'origin';
+  baseAheadCount?: number | null;
+  releaseAheadCount?: number | null;
+  lastSyncedAt?: string;
 }
+
+export interface RepoGitInfo {
+  currentBranch: string;
+  localBranches: string[];
+  remoteBranches: string[];
+  headCommit: string;
+  headSubject: string;
+  headDate: string;
+  tags: Array<{ name: string; commit: string; date: string; subject: string }>;
+}
+
+export interface LocalAheadCommit {
+  hash: string;
+  subject: string;
+  date: string;
+}
+
+export interface LocalChangeFile {
+  path: string;
+  status: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+  additions: number;
+  deletions: number;
+  patch: string;
+}
+
+export interface LocalChangesSnapshot {
+  files: LocalChangeFile[];
+  commitsAhead: number | null;
+  aheadCommits: LocalAheadCommit[];
+}
+
+export interface ForceFetchPreflight {
+  exists: boolean;
+  remoteUrl: string;
+  files: LocalChangeFile[];
+  commitsAhead: number | null;
+  aheadCommits: LocalAheadCommit[];
+  error?: string;
+}
+
+export type ForceFetchProgress = {
+  step: 'check' | 'remote' | 'clone' | 'sync' | 'replace';
+  status: 'running' | 'success' | 'error';
+  message: string;
+};
 
 export interface CacheFile {
   workspace: string;

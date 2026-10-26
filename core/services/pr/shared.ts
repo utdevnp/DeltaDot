@@ -1,3 +1,5 @@
+export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
+
 export function apiDelay(milliseconds = 120): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

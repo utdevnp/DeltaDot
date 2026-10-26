@@ -12,7 +12,9 @@ export function CloneDialog({ workspacePath, onClose, onCloned }: CloneDialogPro
   const [url, setUrl] = useState('');
   const [status, setStatus] = useState<CloneStatus>('idle');
   const [message, setMessage] = useState('');
+  const [overrideExisting, setOverrideExisting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const folderName = url.trim().replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '').split(/[/:]/).pop() || 'repository';
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -30,10 +32,10 @@ export function CloneDialog({ workspacePath, onClose, onCloned }: CloneDialogPro
     }
 
     setStatus('cloning');
-    setMessage(`Cloning ${trimmed.split('/').pop() || 'repository'}...`);
+    setMessage(overrideExisting ? `Creating a clean clone of ${folderName}...` : `Cloning ${folderName}...`);
 
     try {
-      const result = await window.api.cloneRepo(trimmed, workspacePath);
+      const result = await window.api.cloneRepo(trimmed, workspacePath, overrideExisting);
       if (result.success && result.name && result.path) {
         setStatus('done');
         setMessage(`Cloned ${result.name}`);
@@ -98,7 +100,7 @@ export function CloneDialog({ workspacePath, onClose, onCloned }: CloneDialogPro
               ref={inputRef}
               type="text"
               value={url}
-              onChange={(e) => { setUrl(e.target.value); if (status === 'error') setStatus('idle'); }}
+              onChange={(e) => { setUrl(e.target.value); if (status === 'error') { setStatus('idle'); setMessage(''); } }}
               onKeyDown={handleKeyDown}
               placeholder="https://github.com/user/repo.git"
               disabled={status === 'cloning'}
@@ -131,9 +133,21 @@ export function CloneDialog({ workspacePath, onClose, onCloned }: CloneDialogPro
                 whiteSpace: 'nowrap',
               }}
             >
-              {status === 'cloning' ? 'Cloning...' : 'Clone'}
+              {status === 'cloning' ? (overrideExisting ? 'Replacing...' : 'Cloning...') : (overrideExisting ? 'Clone & replace' : 'Clone')}
             </button>
           </div>
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 14, padding: '11px 12px', border: `1px solid ${overrideExisting ? 'var(--border-yellow)' : 'var(--border)'}`, borderRadius: 6, background: overrideExisting ? 'var(--tint-yellow)' : 'var(--bg-tertiary)', cursor: status === 'cloning' ? 'not-allowed' : 'pointer' }}>
+            <input type="checkbox" checked={overrideExisting} disabled={status === 'cloning'} onChange={(event) => { setOverrideExisting(event.target.checked); if (status === 'error') { setStatus('idle'); setMessage(''); } }} style={{ marginTop: 2, accentColor: 'var(--accent-yellow)' }} />
+            <span style={{ display: 'grid', gap: 4 }}>
+              <strong style={{ color: 'var(--text-primary)', fontSize: 12 }}>Override existing repository</strong>
+              <span style={{ color: overrideExisting ? 'var(--accent-yellow)' : 'var(--text-dim)', fontSize: 11, lineHeight: 1.45 }}>
+                {overrideExisting
+                  ? `The existing ${folderName} folder and its local changes will be replaced by a clean clone.`
+                  : 'If this folder already exists, replace it with a clean clone.'}
+              </span>
+            </span>
+          </label>
 
           {/* Status / Error message */}
           {message && (

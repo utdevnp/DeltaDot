@@ -288,29 +288,25 @@ export function App() {
   }, [cfg?.token, cfg?.provider]);
 
   useEffect(() => {
-    if (!cfg?.token?.trim() || repoPaths.length === 0) { setOpenPRCounts({}); return; }
+    const selectedRepoState = repos[selectedRepo];
+    if (!cfg?.token?.trim() || !selectedRepoState) { setOpenPRCounts({}); return; }
     let cancelled = false;
     const loadCounts = async () => {
-      const counts: Record<string, number | string | null> = {};
-      setOpenPRCounts(Object.fromEntries(repoPaths.map((path) => [path, null])));
-      await Promise.all(repoPaths.map(async (repoPath, index) => {
-        if (index > 0) await wait(Math.min(index * 100, 1500));
-        try {
-          const repo = reposRef.current.find((item) => item.path === repoPath);
-          const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
-          if (!repo || !remoteInfo) throw new Error('remote unavailable');
-          const provider = cfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repoPath));
-          if (!provider) throw new Error('provider unavailable');
-          const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, repo.name, 'open', 1, 100);
-          const count = result.prs.filter((pr) => pr.targetBranch === cfg.release).length;
-          counts[repoPath] = result.hasMore ? `${count}+` : count;
-        } catch { counts[repoPath] = null; }
-      }));
-      if (!cancelled) setOpenPRCounts({ ...counts });
+      const repoPath = selectedRepoState.path;
+      setOpenPRCounts((previous) => ({ ...previous, [repoPath]: null }));
+      try {
+        const remoteInfo = await window.api.getRemoteOwnerRepo(repoPath);
+        if (!remoteInfo) throw new Error('remote unavailable');
+        const provider = cfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(repoPath));
+        if (!provider) throw new Error('provider unavailable');
+        const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, selectedRepoState.name, 'open-count', 1, 100);
+        const count = result.prs.filter((pr) => pr.targetBranch === cfg.release).length;
+        if (!cancelled) setOpenPRCounts((previous) => ({ ...previous, [repoPath]: result.hasMore ? `${count}+` : count }));
+      } catch { if (!cancelled) setOpenPRCounts((previous) => ({ ...previous, [repoPath]: null })); }
     };
     void loadCounts();
     return () => { cancelled = true; };
-  }, [cfg, repoPaths]);
+  }, [cfg, repos, selectedRepo]);
 
   // Local git identity for the currently selected repo
   const currentRepoPath = repos[selectedRepo]?.path;
@@ -743,10 +739,10 @@ export function App() {
     } catch { /* non-fatal */ }
   }, [cfg, repoPaths, prs]);
 
-  const syncOne = useCallback(async (repoPath: string) => {
+  const syncOne = useCallback(async (repoPath: string, fetchMode: 'all' | 'origin' = 'all') => {
     if (!cfg) return;
     try {
-      const result = await window.api.syncOneRepo(repoPath, cfg.base, cfg.release);
+      const result = await window.api.syncOneRepo(repoPath, cfg.base, cfg.release, fetchMode);
       setRepos((prev) => prev.map((r) => r.path === repoPath ? result : r));
       const now = new Date().toISOString();
       setLastSync(now);
@@ -841,12 +837,12 @@ export function App() {
       const raw = err instanceof Error ? err.message : String(err);
       if (raw.includes('401')) {
         setPRError('Authentication failed. Your API token may be invalid or expired. Press e to update it.');
+      } else if (raw.toLowerCase().includes('rate limit') || raw.includes('429')) {
+        setPRError('GitHub API rate limit exceeded. Wait for the limit to reset before retrying.');
       } else if (raw.includes('403')) {
         setPRError('Access forbidden. Your token may lack permissions for this repository.');
       } else if (raw.includes('404')) {
         setPRError('Repository or pull requests not found. Check the remote URL and repository name.');
-      } else if (raw.includes('rate limit') || raw.includes('429')) {
-        setPRError('API rate limit exceeded. Wait a few minutes and try again.');
       } else {
         setPRError(`${raw}`);
       }
@@ -936,12 +932,12 @@ export function App() {
         let friendly = `${repo.name}: `;
         if (raw.includes('401')) {
           friendly += 'Authentication failed. Your token may be invalid or expired.';
+        } else if (raw.toLowerCase().includes('rate limit') || raw.includes('429')) {
+          friendly += 'GitHub API rate limit exceeded. Wait for the limit to reset before retrying.';
         } else if (raw.includes('403')) {
           friendly += 'Access forbidden. Your token may lack permissions for this repository.';
         } else if (raw.includes('404')) {
           friendly += 'Repository or pull requests not found. Check the remote URL and repository name.';
-        } else if (raw.includes('rate limit') || raw.includes('429')) {
-          friendly += 'API rate limit exceeded. Wait a few minutes and try again.';
         } else {
           friendly += raw;
         }
@@ -1926,6 +1922,34 @@ export function App() {
   cfgRef.current = cfg;
   const reposRef = useRef(repos);
   reposRef.current = repos;
+  const handleForceFetchComplete = useCallback(async (updatedRepo: RepoState): Promise<{ openPRCount: number | string | null; error?: string }> => {
+    const syncedAt = updatedRepo.lastSyncedAt || new Date().toISOString();
+    const nextRepos = reposRef.current.map((repo) => repo.path === updatedRepo.path ? updatedRepo : repo);
+    setRepos(nextRepos);
+    setLastSync(syncedAt);
+    if (cfg) {
+      try {
+        await window.api.saveCache({ workspace: cfg.workspace, base: cfg.base, release: cfg.release, lastFullSync: syncedAt, repos: nextRepos, prs });
+      } catch { /* the refreshed repo remains available in memory */ }
+    }
+    if (!cfg?.token?.trim()) return { openPRCount: null, error: 'PR count unavailable because no provider API token is configured.' };
+    setOpenPRCounts((previous) => ({ ...previous, [updatedRepo.path]: null }));
+    try {
+      const remoteInfo = await window.api.getRemoteOwnerRepo(updatedRepo.path);
+      if (!remoteInfo) throw new Error('Could not determine the remote repository for PR lookup.');
+      const provider = cfg.provider || await window.api.detectProvider(await window.api.getRemoteUrl(updatedRepo.path));
+      if (!provider) throw new Error('Could not determine the repository provider.');
+      const prResult = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, updatedRepo.name, 'open-count', 1, 100);
+      const count = prResult.prs.filter((pr) => pr.targetBranch === cfg.release).length;
+      const displayCount = prResult.hasMore ? `${count}+` : count;
+      setOpenPRCounts((previous) => ({ ...previous, [updatedRepo.path]: displayCount }));
+      return { openPRCount: displayCount };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setOpenPRCounts((previous) => ({ ...previous, [updatedRepo.path]: null }));
+      return { openPRCount: null, error: message };
+    }
+  }, [cfg, prs]);
   const kubeContextsRef = useRef(kubeContexts);
   kubeContextsRef.current = kubeContexts;
   const kubeContextTabsRef = useRef(kubeContextTabs);
@@ -2709,10 +2733,34 @@ export function App() {
               }
               openRepoCommitInspector(repo);
             }}
+            onRemoveRepo={async (repo) => {
+              await window.api.removeRepoFolder(repo.path);
+              const previousRepos = reposRef.current;
+              const removedIndex = previousRepos.findIndex((item) => item.path === repo.path);
+              const nextRepos = previousRepos.filter((item) => item.path !== repo.path);
+              setRepos(nextRepos);
+              setRepoPaths((paths) => paths.filter((path) => path !== repo.path));
+              setSelectedRepo((index) => index > removedIndex ? index - 1 : Math.min(index, Math.max(0, nextRepos.length - 1)));
+              setRepoPRTabs((tabs) => tabs.filter((tab) => tab.repo.path !== repo.path));
+              setRepoCommitTabs((tabs) => tabs.filter((tab) => tab.repo.path !== repo.path));
+              if (cfg) {
+                const nextConfig = { ...cfg, ignoredRepos: (cfg.ignoredRepos ?? []).filter((path) => path !== repo.path) };
+                setCfg(nextConfig);
+                try {
+                  if (activeWorkspaceId) {
+                    const { theme: _theme, ...workspaceConfig } = nextConfig;
+                    await window.api.saveWorkspaceConfig(activeWorkspaceId, workspaceConfig as AppConfig);
+                  }
+                  await window.api.saveCache({ workspace: cfg.workspace, base: cfg.base, release: cfg.release, lastFullSync: new Date().toISOString(), repos: nextRepos, prs });
+                } catch { showStatusRef.current('Folder removed; workspace cache will refresh on the next sync.', true); }
+              }
+              showStatusRef.current(`${repo.name} folder removed`);
+            }}
             onOpenPRs={(repo) => {
               openRepoPRInspector(repo);
             }}
-            onSyncRepo={(repo) => syncOneRef.current(repo.path)}
+            onSyncRepo={(repo, fetchMode) => syncOneRef.current(repo.path, fetchMode)}
+            onForceFetchComplete={handleForceFetchComplete}
             onOpenCompare={(repo) => {
               setSelectedRepo(repos.findIndex((item) => item.path === repo.path));
               window.api.getRemoteUrl(repo.path).then((url) => {
@@ -3043,6 +3091,10 @@ export function App() {
           <MappingView
             key={activeWorkspaceId ?? workspacePath}
             repos={repos.filter((repo) => !(cfg.ignoredRepos ?? []).includes(repo.path))}
+            baseBranch={cfg.base}
+            releaseBranch={cfg.release}
+            provider={cfg.provider}
+            token={cfg.token}
             mappingTabs={cfg.deploymentMappingTabs ?? []}
             legacyMappings={cfg.deploymentMappings ?? []}
             preferredContext={cfg.mappingContext}
@@ -3051,7 +3103,7 @@ export function App() {
             syncing={isSyncing}
             onEdit={() => setMappingEditing(true)}
             onCancel={() => setMappingEditing(false)}
-            onRefresh={() => { void syncAllRef.current(); }}
+            onOpenPR={openDashboardPRDetail}
             onPersist={(deploymentMappingTabs: DeploymentMappingTab[], activeDeploymentMappingTab: string) => {
               const activeTab = deploymentMappingTabs.find((tab) => tab.id === activeDeploymentMappingTab);
               const nextCfg = {
