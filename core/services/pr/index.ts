@@ -1,7 +1,8 @@
 import type { PRDetail, PRPage, Provider } from '../../types.js';
-import { fetchGitHubPRs, fetchGitHubPRDetail, createGitHubPRComment, approveGitHubPR } from './github.js';
+import { fetchGitHubPRs, searchGitHubPRsByBranches, fetchGitHubPRDetail, createGitHubPRComment, approveGitHubPR } from './github.js';
 import { fetchGitLabPRs, fetchGitLabPRDetail, createGitLabPRComment, approveGitLabPR } from './gitlab.js';
 import { fetchBitbucketPRs, fetchBitbucketPRDetail, createBitbucketPRComment, approveBitbucketPR } from './bitbucket.js';
+import type { Fetcher } from './shared.js';
 
 export async function fetchPRsByProvider(
   owner: string,
@@ -12,6 +13,9 @@ export async function fetchPRsByProvider(
   state: string = 'open',
   page = 1,
   pageSize = 10,
+  sourceBranch?: string,
+  targetBranch?: string,
+  fetcher?: Fetcher,
 ): Promise<PRPage> {
   switch (provider) {
     case 'gitlab':
@@ -20,7 +24,8 @@ export async function fetchPRsByProvider(
       return fetchBitbucketPRs(owner, repo, token, repoName, state, page, pageSize);
     case 'github':
     default:
-      return fetchGitHubPRs(owner, repo, token, repoName, state, page, pageSize);
+      if (sourceBranch && targetBranch) return searchGitHubPRsByBranches(owner, repo, token, repoName ?? repo, sourceBranch, targetBranch, page, pageSize, fetcher);
+      return fetchGitHubPRs(owner, repo, token, repoName, state, page, pageSize, fetcher);
   }
 }
 

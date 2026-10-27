@@ -12,12 +12,14 @@ export async function fetchBitbucketPRs(
 ): Promise<PRPage> {
   const headers = bearerHeaders(token);
   const exhaustive = state.toUpperCase() === 'ALL-SEARCH';
-  const apiState = (state.toUpperCase() === 'ALL' || exhaustive) ? 'MERGED,SUPERSEDED,OPEN' : state.toUpperCase() === 'CLOSED' ? 'DECLINED,MERGED,SUPERSEDED' : 'OPEN';
+  const allStates = state.toUpperCase() === 'ALL';
+  const mappingAll = state.toLowerCase() === 'mapping-all';
+  const apiState = (allStates || exhaustive || mappingAll) ? 'DECLINED,MERGED,SUPERSEDED,OPEN' : state.toUpperCase() === 'CLOSED' ? 'DECLINED,MERGED,SUPERSEDED' : 'OPEN';
   const data: unknown[] = [];
   const requestSize = exhaustive ? 100 : pageSize;
   let nextUrl: string | undefined = `https://api.bitbucket.org/2.0/repositories/${owner}/${repo}/pullrequests?state=${apiState}&pagelen=${requestSize}${exhaustive ? '' : `&page=${page}`}`;
   let pageIndex = 0;
-  while (nextUrl && pageIndex < (exhaustive ? 10 : 1)) {
+  while (nextUrl && (allStates || exhaustive || pageIndex < 1)) {
     if (pageIndex > 0) await apiDelay(exhaustive ? 3600 : 120);
     const res = await fetch(nextUrl, { headers });
     if (!res.ok) {
@@ -26,7 +28,7 @@ export async function fetchBitbucketPRs(
     }
     const json = await res.json() as { values: unknown[]; next?: string };
     if (Array.isArray(json.values)) data.push(...json.values);
-    nextUrl = exhaustive ? json.next : undefined;
+    nextUrl = allStates || exhaustive ? json.next : undefined;
     pageIndex++;
   }
   if (!Array.isArray(data)) {
@@ -53,7 +55,7 @@ export async function fetchBitbucketPRs(
     };
   });
 
-  if (exhaustive) return { prs, page: 1, pageSize: requestSize, hasMore: false };
+  if (exhaustive || allStates || mappingAll || state.toLowerCase() === 'open-count') return { prs, page: 1, pageSize: requestSize, hasMore: (state.toLowerCase() === 'open-count' || mappingAll) && prs.length === requestSize };
 
   const enriched = await Promise.all(prs.map(async (pr) => {
     try {

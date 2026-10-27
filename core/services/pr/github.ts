@@ -1,5 +1,5 @@
 import type { PR, PRComment, PRDetail, PRCommit, PRFile, PRPage } from '../../types.js';
-import { apiDelay, githubHeaders, uniqueStrings } from './shared.js';
+import { apiDelay, githubHeaders, uniqueStrings, type Fetcher } from './shared.js';
 
 export async function fetchGitHubPRs(
   owner: string,
@@ -9,6 +9,7 @@ export async function fetchGitHubPRs(
   state: string = 'open',
   page = 1,
   pageSize = 10,
+  fetcher: Fetcher = fetch,
 ): Promise<PRPage> {
   const headers = githubHeaders(token);
   const data: unknown[] = [];
@@ -17,10 +18,10 @@ export async function fetchGitHubPRs(
   const requestSize = exhaustive ? 100 : pageSize;
   for (let apiPage = 1; apiPage <= pageCount; apiPage++) {
     if (apiPage > 1) await apiDelay(exhaustive ? 5000 : 120);
-    const apiState = exhaustive ? 'all' : state;
+    const apiState = exhaustive ? 'all' : state === 'open-count' ? 'open' : state === 'mapping-all' ? 'all' : state;
     const pageParam = exhaustive ? `&page=${apiPage}` : '';
     const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=${apiState}&per_page=${requestSize}${exhaustive ? pageParam : `&page=${page}`}`;
-    const res = await fetch(url, { headers });
+    const res = await fetcher(url, { headers });
     if (!res.ok) {
       const errorBody = await res.text();
       throw new Error(`GitHub API error ${res.status}: ${res.statusText} - ${errorBody}`);
@@ -38,7 +39,7 @@ export async function fetchGitHubPRs(
     number: item.number as number,
     title: item.title as string,
     author: (item.user as any)?.login as string ?? '',
-    state: item.state as string,
+    state: item.merged_at ? 'merged' : item.state as string,
     sourceBranch: (item.head as any)?.ref as string ?? '',
     targetBranch: (item.base as any)?.ref as string ?? '',
     createdAt: item.created_at as string,
@@ -50,12 +51,12 @@ export async function fetchGitHubPRs(
 
   // Approval status is not needed for historical Jira searches and checking
   // every old PR can exhaust the provider rate limit across large workspaces.
-  if (exhaustive) return { prs, page: 1, pageSize: requestSize, hasMore: false };
+  if (exhaustive || state === 'all' || state === 'open-count' || state === 'mapping-all') return { prs, page, pageSize: requestSize, hasMore: prs.length === requestSize };
 
   const enriched = await Promise.all(prs.map(async (pr) => {
     try {
       const revUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${pr.number}/reviews?per_page=100`;
-      const revRes = await fetch(revUrl, { headers });
+      const revRes = await fetcher(revUrl, { headers });
       if (revRes.ok) {
         const reviews = await revRes.json() as any[];
         pr.approved = Array.isArray(reviews) && reviews.some((r: any) => r.state === 'APPROVED');
@@ -64,6 +65,36 @@ export async function fetchGitHubPRs(
     return pr;
   }));
   return { prs: enriched, page, pageSize: requestSize, hasMore: prs.length === requestSize };
+}
+
+export async function searchGitHubPRsByBranches(
+  owner: string, repo: string, token: string, repoName: string, sourceBranch: string, targetBranch: string, page = 1, pageSize = 100, fetcher: Fetcher = fetch,
+): Promise<PRPage> {
+  // The pulls endpoint supports filtering by base branch without requiring
+  // GitHub Search permissions. Fetch closed PRs because that includes both
+  // merged and unmerged-closed PRs; source branch is filtered by the caller.
+  const params = new URLSearchParams({ state: 'closed', base: targetBranch, per_page: String(pageSize), page: String(page) });
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?${params.toString()}`;
+  const res = await fetcher(url, { headers: githubHeaders(token) });
+  if (!res.ok) {
+    const errorBody = await res.text();
+    throw new Error(`GitHub API error ${res.status}: ${res.statusText} - ${errorBody}`);
+  }
+  const data = await res.json() as any[];
+  if (!Array.isArray(data)) throw new Error('Unexpected GitHub API response: Expected pull request list');
+  const prs: PR[] = data.map((item) => ({
+    number: item.number as number,
+    title: item.title as string,
+    author: item.user?.login ?? '',
+    state: item.merged_at ? 'merged' : item.state as string,
+    sourceBranch: item.head?.ref ?? sourceBranch,
+    targetBranch: item.base?.ref ?? targetBranch,
+    createdAt: item.created_at as string,
+    url: item.html_url as string,
+    repoName,
+    approved: false,
+  }));
+  return { prs, page, pageSize, hasMore: prs.length === pageSize };
 }
 
 export async function fetchGitHubPRDetail(

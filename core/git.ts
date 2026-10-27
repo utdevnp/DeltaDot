@@ -1,6 +1,7 @@
 import { exec } from 'child_process';
-import type { CommitEntry, CommitDetail, CommitFile, LatestCommit, RepoState } from './types.js';
+import type { CommitEntry, CommitDetail, CommitFile, LatestCommit, RepoGitInfo, RepoState } from './types.js';
 import { toUsername } from './utils.js';
+import { getLocalChanges } from './local-changes.js';
 
 export function run(cmd: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -34,13 +35,50 @@ export async function fetchBranchCommits(repoPath: string, branch: string): Prom
   return fetchLatestCommits(repoPath, branch);
 }
 
-async function getLatestTag(repoPath: string, base: string): Promise<{ tag: string | null; date: string | null }> {
+export async function countCommitsSinceTag(repoPath: string, branch: string): Promise<{ tag: string; count: number } | null> {
+  const safeBranch = branch.trim().replace(/^refs\/heads\//, '');
+  if (!safeBranch || safeBranch.startsWith('-')) return null;
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  await run('git fetch origin --tags --quiet', repoPath).catch(() => '');
   try {
-    const out = await run(`git tag --merged origin/${base} --sort=-version:refname`, repoPath);
-    const first = out.split('\n')[0]?.trim();
-    if (!first) return { tag: null, date: null };
-    const dateOut = await run(`git log -1 --format="%cI" ${first}`, repoPath);
-    return { tag: first, date: dateOut || null };
+    const branchRef = `origin/${safeBranch}`;
+    const tags = await run(`git for-each-ref --merged=${quote(branchRef)} --sort=-version:refname --format='%(refname:short)' refs/tags`, repoPath);
+    const latestTag = tags.split('\n')[0]?.trim();
+    if (!latestTag) return null;
+    const count = await run(`git rev-list --count ${quote(`${latestTag}..${branchRef}`)}`, repoPath);
+    return { tag: latestTag, count: Number.parseInt(count, 10) };
+  } catch { return null; }
+}
+
+export async function getRepoGitInfo(repoPath: string): Promise<RepoGitInfo> {
+  // Refresh tags even when the configured release branch is missing.
+  await run('git fetch --all --tags --quiet', repoPath).catch(() => '');
+  const [currentBranch, localBranchesOut, remoteBranchesOut, headOut, tagsOut] = await Promise.all([
+    getCurrentBranch(repoPath),
+    run("git for-each-ref --format='%(refname:short)' refs/heads", repoPath),
+    run("git for-each-ref --format='%(refname:short)' refs/remotes", repoPath),
+    run('git log -1 --format="%h%x09%s%x09%cI" HEAD', repoPath).catch(() => ''),
+    run("git for-each-ref --sort=-version:refname --format='%(refname:short)%09%(objectname:short)%09%(creatordate:iso-strict)%09%(subject)' refs/tags", repoPath).catch(() => ''),
+  ]);
+  const localBranches = localBranchesOut.split('\n').map((branch) => branch.trim()).filter(Boolean);
+  const remoteBranches = remoteBranchesOut.split('\n').map((branch) => branch.trim()).filter((branch) => branch && branch !== 'origin/HEAD');
+  const [headCommit = '', headSubject = '', headDate = ''] = headOut.split('\t');
+  const tags = tagsOut.split('\n').filter(Boolean).map((line) => {
+    const [name = '', commit = '', date = '', subject = ''] = line.split('\t');
+    return { name, commit, date, subject };
+  });
+  return {
+    currentBranch,
+    localBranches, remoteBranches,
+    headCommit, headSubject, headDate, tags,
+  };
+}
+
+async function getLatestTag(repoPath: string): Promise<{ tag: string | null; date: string | null }> {
+  try {
+    const out = await run("git for-each-ref --sort=-creatordate --format='%(refname:short)%09%(creatordate:iso-strict)' refs/tags", repoPath);
+    const [tag, date] = out.split('\n')[0]?.split('\t') ?? [];
+    return { tag: tag?.trim() || null, date: date?.trim() || null };
   } catch { return { tag: null, date: null }; }
 }
 
@@ -51,15 +89,47 @@ async function getCurrentBranch(repoPath: string): Promise<string> {
   } catch { return ''; }
 }
 
-export async function analyzeRepo(repoPath: string, base: string, release: string): Promise<RepoState> {
+export async function analyzeRepo(repoPath: string, base: string, release: string, fetchMode: 'all' | 'origin' = 'all'): Promise<RepoState> {
   const name = repoPath.split('/').pop() ?? repoPath;
+  let localChangesCount = 0;
+  let localCommitsCount: number | null = null;
   try {
-    await run('git fetch --all --quiet', repoPath);
+    const localChanges = await getLocalChanges(repoPath);
+    localChangesCount = localChanges.files.length;
+    localCommitsCount = localChanges.commitsAhead;
+    // Every repo sync refreshes tags, regardless of release branch or sync mode.
+    // Attempt the tag fetch for every repo. A fetch error should not prevent
+    // us from reading tags already present locally or comparing branches.
+    await run('git fetch --all --tags --quiet', repoPath).catch(() => '');
+    const { tag: latestVersion, date: latestVersionDate } = await getLatestTag(repoPath);
+    let hasRelease = true;
+    try {
+      await run(`git show-ref --verify --quiet refs/remotes/origin/${release}`, repoPath);
+    } catch {
+      hasRelease = false;
+    }
+    if (!hasRelease) {
+      const baseCommits = await fetchLatestCommits(repoPath, base);
+      const currentBranch = await getCurrentBranch(repoPath);
+      const first = baseCommits[0];
+      return {
+        name, path: repoPath, status: 'synced', diffCommits: [], latestCommits: baseCommits, baseCommits,
+        latestVersion, latestVersionDate, currentBranch,
+        lastCommitMsg: first?.subject ?? '', lastCommitAge: first?.age ?? '',
+        lastCommitAuthor: first?.author ?? '', error: null, missingRelease: true, localChangesCount,
+        localCommitsCount, fetchMode, baseAheadCount: null, releaseAheadCount: 0,
+        lastSyncedAt: new Date().toISOString(),
+      };
+    }
     const logOut = await run(`git log origin/${base}..origin/${release} --format="%h|||%s|||%ae|||%ar|||%cI"`, repoPath);
     const diffCommits = parseOneline(logOut);
+    let baseAheadCount: number | null = null;
+    try {
+      const ahead = await run(`git rev-list --count origin/${release}..origin/${base}`, repoPath);
+      baseAheadCount = Number.parseInt(ahead, 10) || 0;
+    } catch { /* keep the normal sync result if only the reverse comparison is unavailable */ }
     const latestCommits = await fetchLatestCommits(repoPath, release);
     const baseCommits = await fetchLatestCommits(repoPath, base);
-    const { tag: latestVersion, date: latestVersionDate } = await getLatestTag(repoPath, base);
     const currentBranch = await getCurrentBranch(repoPath);
     const first = latestCommits[0];
     return {
@@ -71,6 +141,12 @@ export async function analyzeRepo(repoPath: string, base: string, release: strin
       lastCommitAge: first?.age ?? '',
       lastCommitAuthor: first?.author ?? '',
       error: null,
+      localChangesCount,
+      localCommitsCount,
+      fetchMode,
+      baseAheadCount,
+      releaseAheadCount: diffCommits.length,
+      lastSyncedAt: new Date().toISOString(),
     };
   } catch (err: unknown) {
     const raw = err instanceof Error ? err.message : String(err);
@@ -78,9 +154,11 @@ export async function analyzeRepo(repoPath: string, base: string, release: strin
     const trimmed = msg.trim();
     const missingBranchPattern = /(couldn'?t find remote ref|could not find remote ref|couldn'?t find|ambiguous argument|bad revision|unknown revision|no such ref|does not have any commits yet)/i;
     if (missingBranchPattern.test(trimmed) && trimmed.includes(`origin/${release}`)) {
-      return { name, path: repoPath, status: 'synced', diffCommits: [], latestCommits: [], baseCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null, missingRelease: true };
+      const { tag: latestVersion, date: latestVersionDate } = await getLatestTag(repoPath);
+      return { name, path: repoPath, status: 'synced', diffCommits: [], latestCommits: [], baseCommits: [], latestVersion, latestVersionDate, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null, missingRelease: true, localChangesCount, localCommitsCount, fetchMode, lastSyncedAt: new Date().toISOString() };
     }
-    return { name, path: repoPath, status: 'error', diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: trimmed };
+    const { tag: latestVersion, date: latestVersionDate } = await getLatestTag(repoPath);
+    return { name, path: repoPath, status: 'error', diffCommits: [], latestCommits: [], localChangesCount, localCommitsCount, fetchMode, latestVersion, latestVersionDate, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: trimmed };
   }
 }
 

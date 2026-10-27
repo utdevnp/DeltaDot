@@ -13,7 +13,7 @@ export async function fetchGitLabPRs(
   const headers = bearerHeaders(token);
   const projectId = encodeURIComponent(`${owner}/${repo}`);
   const exhaustive = state === 'all-search';
-  const apiState = state === 'closed' ? 'closed' : (state === 'all' || exhaustive) ? 'all' : 'opened';
+  const apiState = state === 'closed' ? 'closed' : (state === 'all' || state === 'mapping-all' || exhaustive) ? 'all' : 'opened';
   const data: unknown[] = [];
   const pageCount = exhaustive ? 10 : 1;
   const requestSize = exhaustive ? 100 : pageSize;
@@ -49,7 +49,7 @@ export async function fetchGitLabPRs(
     hasConflicts: typeof item.has_conflicts === 'boolean' ? item.has_conflicts : undefined,
   }));
 
-  if (exhaustive) return { prs: mrs, page: 1, pageSize: requestSize, hasMore: false };
+  if (exhaustive || state === 'all' || state === 'open-count' || state === 'mapping-all') return { prs: mrs, page, pageSize: requestSize, hasMore: mrs.length === requestSize };
 
   const enriched = await Promise.all(mrs.map(async (mr) => {
     try {
