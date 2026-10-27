@@ -35,7 +35,7 @@ export async function fetchBranchCommits(repoPath: string, branch: string): Prom
   return fetchLatestCommits(repoPath, branch);
 }
 
-export async function countCommitsSinceTag(repoPath: string, branch: string): Promise<number | null> {
+export async function countCommitsSinceTag(repoPath: string, branch: string): Promise<{ tag: string; count: number } | null> {
   const safeBranch = branch.trim().replace(/^refs\/heads\//, '');
   if (!safeBranch || safeBranch.startsWith('-')) return null;
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -46,7 +46,7 @@ export async function countCommitsSinceTag(repoPath: string, branch: string): Pr
     const latestTag = tags.split('\n')[0]?.trim();
     if (!latestTag) return null;
     const count = await run(`git rev-list --count ${quote(`${latestTag}..${branchRef}`)}`, repoPath);
-    return Number.parseInt(count, 10);
+    return { tag: latestTag, count: Number.parseInt(count, 10) };
   } catch { return null; }
 }
 

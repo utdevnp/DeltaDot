@@ -16,7 +16,7 @@ export interface DeltaDotAPI {
   syncAllRepos: (repoPaths: string[], base: string, release: string) => Promise<RepoState[]>;
   getLocalChanges: (repoPath: string) => Promise<LocalChangesSnapshot>;
   getRepoGitInfo: (repoPath: string) => Promise<RepoGitInfo>;
-  countCommitsSinceTag: (repoPath: string, branch: string) => Promise<number | null>;
+  countCommitsSinceTag: (repoPath: string, branch: string) => Promise<{ tag: string; count: number } | null>;
   removeRepoFolder: (repoPath: string) => Promise<void>;
   inspectForceFetch: (repoPath: string) => Promise<ForceFetchPreflight>;
   forceReplaceRepo: (operationId: string, repoPath: string, remoteUrl: string, base: string, release: string, onProgress: (progress: ForceFetchProgress) => void) => Promise<RepoState>;

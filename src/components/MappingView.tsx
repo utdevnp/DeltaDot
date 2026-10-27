@@ -107,7 +107,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   const [detailPRLoading, setDetailPRLoading] = useState(false);
   const [detailPRError, setDetailPRError] = useState('');
   const [detailPRHasMore, setDetailPRHasMore] = useState(false);
-  const [changeCounts, setChangeCounts] = useState<Record<string, number | null>>({});
+  const [changeCounts, setChangeCounts] = useState<Record<string, { tag: string; count: number } | null>>({});
   const [selectedMappingId, setSelectedMappingId] = useState('');
   const [detailDrawerWidth, setDetailDrawerWidth] = useState(630);
   const detailResize = useRef<{ pointerId: number; x: number; width: number } | null>(null);
@@ -240,6 +240,10 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
             imageVersionOverride: '',
           };
         });
+        // Keep saved mappings for deployments that are temporarily absent from
+        // the latest Kubernetes response so a refresh never loses user data.
+        const returnedDeployments = new Set(items.map((deployment) => deployment.name));
+        rows.push(...existing.filter((mapping) => !returnedDeployments.has(mapping.deployment)));
         setDeployments(items.map((deployment) => ({ ...deployment, context: selectedContext })));
         setDraft(rows);
         setLoadedMappings(rows);
@@ -259,7 +263,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
 
   const isSynced = (mapping: DeploymentMapping) => {
     if (mapping.noRepo) return false;
-    return changeCounts[mapping.id] === 0;
+    return changeCounts[mapping.id]?.count === 0;
   };
 
   const contextMappings = draft.filter((mapping) => mapping.context === selectedContext && mapping.namespace === 'default');
@@ -294,7 +298,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         const deployment = deployments.find((item) => item.context === mapping.context && item.namespace === mapping.namespace && item.name === mapping.deployment);
         const repo = repos.find((item) => item.path === mapping.repoPath);
         const deployed = mapping.imageVersionOverride?.trim() || (deployment ? tagOf(deployment.image) : '');
-        return !mapping.noRepo && changeCounts[mapping.id] != null && changeCounts[mapping.id]! > 0;
+        return !mapping.noRepo && (changeCounts[mapping.id]?.count ?? 0) > 0;
       }
       return true;
     })
@@ -335,6 +339,33 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     }), [draft, selectedContext, mappingFilter, releaseFilter, deploymentAgeFilter, deployments, repos, search, changeCounts]);
 
   const patch = (id: string, values: Partial<DeploymentMapping>) => setDraft((previous) => previous.map((item) => item.id === id ? { ...item, ...values } : item));
+  const openGitDiff = async (mapping: DeploymentMapping) => {
+    const repo = repos.find((item) => item.path === mapping.repoPath);
+    const comparison = changeCounts[mapping.id];
+    if (!repo || !comparison) return;
+    try {
+      const remote = await window.api.getRemoteUrl(repo.path);
+      const branch = mapping.baseBranch?.trim() || baseBranch;
+      const url = await window.api.getCompareUrl(remote, comparison.tag, branch);
+      if (url) await window.api.openUrl(url);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'o' || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (editing || drawerDraft || tabEditor || detailMappingId || contextMenu || tabMenu || deleteTabTarget) return;
+      const mapping = draft.find((row) => row.id === selectedMappingId);
+      if (!mapping || !changeCounts[mapping.id]?.count) return;
+      event.preventDefault();
+      void openGitDiff(mapping);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [draft, selectedMappingId, changeCounts, repos, baseBranch, editing, drawerDraft, tabEditor, detailMappingId, contextMenu, tabMenu, deleteTabTarget]);
   const addMapping = () => {
     const deployment = deployments.find((item) => !draft.some((mapping) => mapping.deployment === item.name && mapping.context === selectedContext));
     setDraft((previous) => [...previous, { id: crypto.randomUUID(), context: selectedContext, namespace: 'default', deployment: deployment?.name ?? '', repoPath: deployment ? initialRepo(deployment, repos) : '', imageVersionOverride: '' }]);
@@ -520,14 +551,15 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     {!loading && error && <div className="mapping-state mapping-error">{error}</div>}
     {!loading && !error && contexts.length === 0 && <div className="mapping-state">No Kubernetes contexts found. Configure a context in your kubeconfig to map deployments.</div>}
     <div className="table-container mapping-table-wrap"><div className="table-header mapping-table-head">
-        <div className="cell mapping-column-number">#</div><div className="cell mapping-column-deployment">DEPLOYMENT</div><div className="cell mapping-column-repo">GIT REPOSITORY</div>{editing && <div className="cell mapping-column-no-repo">NO REPO</div>}<div className="cell mapping-column-image">DEPLOYED IMAGE</div><div className="cell mapping-column-latest">LATEST GIT TAG</div><div className="cell mapping-column-changes">CHANGES</div><div className="cell mapping-column-status">STATUS</div>{editing && <div className="cell mapping-column-actions" />}
+        <div className="cell mapping-column-number">#</div><div className="cell mapping-column-deployment">DEPLOYMENT</div><div className="cell mapping-column-repo">GIT REPOSITORY</div><div className="cell mapping-column-changes">CHANGES</div>{editing && <div className="cell mapping-column-no-repo">NO REPO</div>}<div className="cell mapping-column-image">DEPLOYED IMAGE</div><div className="cell mapping-column-latest">LATEST GIT TAG</div><div className="cell mapping-column-status">STATUS</div>{editing && <div className="cell mapping-column-actions" />}
     </div>
       {visibleMappings.map((mapping, index) => {
         const deployment = deployments.find((item) => item.context === mapping.context && item.namespace === mapping.namespace && item.name === mapping.deployment);
         const repo = repos.find((item) => item.path === mapping.repoPath);
         const deployed = mapping.imageVersionOverride?.trim() || (deployment ? tagOf(deployment.image) : '');
         const latest = repo?.latestVersion ?? '';
-        const changes = changeCounts[mapping.id];
+        const changes = changeCounts[mapping.id]?.count;
+        const comparisonTag = changeCounts[mapping.id]?.tag;
         const dim = !editing && !!repo?.missingRelease && !syncing;
         const age = deploymentAge(deployment);
         const deploymentTimestamp = deployment?.lastUpdated || deployment?.createdAt;
@@ -536,12 +568,12 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
           <div className="cell mapping-column-number mapping-serial">{index + 1}</div>
           {editing ? <div className="cell mapping-column-deployment"><SearchableSelect label="Kubernetes deployment" value={deployment ? deploymentKey(deployment) : ''} placeholder="Search deployment…" options={deployments.map((item) => ({ value: deploymentKey(item), label: item.name }))} onChange={(value) => { const selected = deployments.find((item) => deploymentKey(item) === value); if (selected) patch(mapping.id, { context: selected.context, namespace: 'default', deployment: selected.name, repoPath: mapping.repoPath || initialRepo(selected, repos), imageVersionOverride: '' }); }} /></div> : <div className="cell mapping-column-deployment mapping-deployment"><strong>{mapping.deployment || 'Select deployment'}</strong></div>}
           <div className="cell mapping-column-repo">{editing ? mapping.noRepo ? <span className="mapping-muted">—</span> : <SearchableSelect label="Git repository" value={mapping.repoPath} placeholder="Search repository…" options={repos.map((item) => ({ value: item.path, label: item.name }))} onChange={(value) => patch(mapping.id, { repoPath: value, noRepo: false })} /> : mapping.noRepo ? <span className="mapping-no-repo-note">No repo for this</span> : repo?.name ?? (mapping.repoPath ? mapping.repoPath.split(/[\\/]/).pop() : null) ?? <span className="mapping-muted">Not mapped</span>}</div>
+          <div className={`cell mapping-column-changes ${changes != null && changes > 0 ? 'mapping-changes-out-of-sync' : ''}`} title={comparisonTag ? `Open diff: ${comparisonTag} → ${mapping.baseBranch?.trim() || baseBranch} (press O)` : `Commits on ${mapping.baseBranch?.trim() || baseBranch} since its latest reachable Git tag`}>
+            {mapping.noRepo ? '—' : changes == null ? '—' : <button type="button" className="mapping-changes-link" aria-label={`Open ${changes} commits behind diff for ${repo?.name ?? mapping.deployment}`} disabled={!comparisonTag || changes === 0} onClick={(event) => { event.stopPropagation(); setSelectedMappingId(mapping.id); void openGitDiff(mapping); }}>{changes > 0 ? `${changes} behind` : '0 behind'}</button>}
+          </div>
           {editing && <div className="cell mapping-column-no-repo"><input type="checkbox" aria-label={`No repository needed for ${mapping.deployment}`} checked={!!mapping.noRepo} onChange={(event) => patch(mapping.id, { noRepo: event.target.checked })} /></div>}
           <div className={`cell mapping-column-image ${deployed ? 'mapping-version' : ''}`}>{editing ? <><input aria-label="Deployed image version override" placeholder={deployed || 'Image version override'} value={mapping.imageVersionOverride ?? ''} onChange={(event) => patch(mapping.id, { imageVersionOverride: event.target.value })} />{age && <small className="mapping-image-age">{age}</small>}</> : <><span>{deployed || '—'}</span>{age && <small className="mapping-image-age" title={deployment?.lastUpdated || deployment?.createdAt}>· {age}</small>}</>}</div>
           <div className="cell mapping-column-latest mapping-latest"><strong title={latest || undefined}>{latest || '—'}</strong><small title={repo?.latestVersionDate ? new Date(repo.latestVersionDate).toLocaleString() : undefined}>{repo?.latestVersionDate ? `${new Date(repo.latestVersionDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${timeAgo(repo.latestVersionDate)} ago` : 'Tag time unavailable'}</small></div>
-          <div className={`cell mapping-column-changes ${changes != null && changes > 0 ? 'mapping-changes-out-of-sync' : ''}`} title={`Commits on ${mapping.baseBranch?.trim() || baseBranch} since its latest reachable Git tag`}>
-            {mapping.noRepo ? '—' : changeCounts[mapping.id] == null ? '—' : changeCounts[mapping.id]}
-          </div>
           <div className="cell mapping-column-status">{mapping.noRepo ? <span className="mapping-status synced">✓ Mapped</span> : !mapping.repoPath ? <span className="mapping-status out-of-sync">Unmapped</span> : deploymentHours != null && deploymentHours < 4 ? <span className="mapping-status synced">✓ Deployed</span> : deploymentHours != null && deploymentHours <= 9 ? <span className="mapping-status synced">Deployed today</span> : <span className="mapping-status synced">✓ Mapped</span>}</div>
           {editing && <div className="cell mapping-column-actions mapping-row-actions"><button type="button" className="mapping-drag" aria-label="Drag to reorder" title="Drag to reorder">⠿</button><button type="button" className="mapping-remove" aria-label="Remove mapping" onClick={() => setDraft((previous) => previous.filter((item) => item.id !== mapping.id))}>×</button></div>}
         </div>;

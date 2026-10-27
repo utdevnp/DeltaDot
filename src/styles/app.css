@@ -800,6 +800,7 @@ select:focus-visible {
 .mapping-button.danger:hover { background:color-mix(in srgb, var(--accent-red) 18%, transparent); }
 .mapping-button.secondary,.mapping-add { background:var(--bg-secondary); color:var(--text-primary); }
 .mapping-table-wrap { min-height:0; flex:1; overflow:auto; border:0; border-radius:0; }
+.table-container.mapping-table-wrap { overflow-x:auto; }
 .mapping-table-head { position:sticky; top:0; }
 .mapping-row { min-height:42px; padding:5px 16px; font-size:12px; cursor:default; }
 .mapping-row:hover { background:linear-gradient(90deg, var(--tint-blue), transparent 75%); }
@@ -813,7 +814,9 @@ select:focus-visible {
 .mapping-table-head .mapping-column-latest,.mapping-row .mapping-column-latest { box-sizing:border-box; min-width:220px; flex:1.5 1 250px; padding-left:14px; }
 .mapping-table-head .mapping-column-status,.mapping-row .mapping-column-status { width:105px; flex:0 0 105px; }
 .mapping-table-head .mapping-column-changes,.mapping-row .mapping-column-changes { width:82px; flex:0 0 82px; text-align:center; font:11px var(--font-mono); }
-.mapping-row .mapping-changes-out-of-sync { color:var(--accent-red); font-weight:700; }
+.mapping-row .mapping-changes-out-of-sync { color:var(--accent-red); }
+.mapping-changes-link { padding:0; border:0; background:transparent; color:inherit; font:inherit; text-align:center; cursor:pointer; }
+.mapping-changes-link:disabled { cursor:default; }
 .mapping-table-head .mapping-column-actions,.mapping-row .mapping-column-actions { width:58px; flex:0 0 58px; }
 .mapping-table-head .cell,.mapping-row .cell { padding-right:10px; }
 .mapping-table-head .cell:last-child,.mapping-row .cell:last-child { padding-right:0; }
