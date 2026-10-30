@@ -28,7 +28,8 @@ import { getRemoteOwnerRepo, fetchPRs, fetchPRDetail, createPRComment, approvePR
 import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira.js';
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
 import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, streamKubePodLogs, getKubeResources, restartKubeDeployment, restartAllKubeDeployments, deleteKubeJob, deleteKubeResource, describeKubeResource } from '../core/k8s.js';
-import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace, KubeResourceKind, ForceFetchPreflight } from '../core/types.js';
+import { loadKubeContextSettings, saveKubeContextSettings } from '../core/kube-context-settings.js';
+import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace, KubeResourceKind, KubeContextSettings, ForceFetchPreflight } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -232,7 +233,7 @@ ipcMain.handle('sync-one-repo', async (_event, repoPath: string, base: string, r
 
 ipcMain.handle('get-local-changes', (_event, repoPath: string) => getLocalChanges(repoPath));
 ipcMain.handle('get-repo-git-info', (_event, repoPath: string) => getRepoGitInfo(repoPath));
-ipcMain.handle('count-commits-since-tag', (_event, repoPath: string, branch: string) => countCommitsSinceTag(repoPath, branch));
+ipcMain.handle('count-commits-since-tag', (_event, repoPath: string, branch: string, deployedVersion?: string) => countCommitsSinceTag(repoPath, branch, deployedVersion));
 ipcMain.handle('remove-repo-folder', async (_event, repoPath: string) => {
   if (!currentConfig?.workspace) throw new Error('No active workspace is configured.');
   const workspaceRoot = await realpath(resolve(currentConfig.workspace));
@@ -400,6 +401,12 @@ ipcMain.handle('k8s-contexts', async () => {
   return getKubeContexts();
 });
 
+ipcMain.handle('k8s-context-settings', async () => loadKubeContextSettings());
+
+ipcMain.handle('save-k8s-context-settings', async (_event, settings: KubeContextSettings) => {
+  await saveKubeContextSettings(settings);
+});
+
 ipcMain.handle('k8s-namespaces', async (_event, contextName: string) => {
   return getKubeNamespaces(contextName);
 });
@@ -551,7 +558,7 @@ ipcMain.handle('save-workspaces', async (_event, workspaces: Workspace[]) => {
 });
 
 ipcMain.handle('open-url', async (_event, url: string) => {
-  if (url) shell.openExternal(url);
+  if (url) await shell.openExternal(url);
 });
 
 ipcMain.handle('detect-provider', async (_event, remoteUrl: string) => {

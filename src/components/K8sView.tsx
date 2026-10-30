@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  KubeContext, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeContainer, KubeDeploymentDetail,
+  KubeContext, KubeContextSetting, KubeContextSettings, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeContainer, KubeDeploymentDetail,
   KubeResourceColumn, KubeResourceItem,
   KubePodStatusSummary,
 } from '../../core/types.js';
@@ -13,6 +13,8 @@ import { PodLogsView } from './k8s/PodLogsView.js';
 
 interface K8sViewProps {
   contexts: KubeContext[];
+  enabledContexts: KubeContext[];
+  contextSettings: KubeContextSettings;
   contextTabs: KubeContextTab[];
   activeTab: string; // '' | 'compare' | context/workload tab id
   workloadTabs: KubeWorkloadTab[];
@@ -21,6 +23,8 @@ interface K8sViewProps {
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
   onOpenContextTab: (ctx: string) => void;
+  onRefreshContexts: () => Promise<void>;
+  onSaveContextSetting: (contextName: string, setting: KubeContextSetting) => Promise<void>;
   onTabNamespaceChange: (tabId: string, ns: string) => void;
   onTabKindChange: (tabId: string, kind: string) => void;
   onTabPodFilterToggle: (tabId: string, category: string) => void;
@@ -36,6 +40,10 @@ interface K8sViewProps {
   onViewResource: (index: number) => Promise<KubeDeploymentDetail | string | null>;
   onRestartDeployment: (index: number, all: boolean) => void;
   onSelect: (i: number) => void;
+  onToggleSelectionMode: (tabId: string) => void;
+  onToggleResourceSelection: (tabId: string, key: string) => void;
+  onSelectVisibleResources: (tabId: string, keys: string[], checked: boolean) => void;
+  onRequestBulkAction: (tabId: string, action: 'delete' | 'restart') => void;
   onOpenWorkload: (i: number) => void;
   onOpenPod: (i: number) => void;
   onSelectContextContainer: (i: number) => void;
@@ -74,8 +82,9 @@ const SELECT_STYLE: React.CSSProperties = {
 
 // ─── Tab bar ────────────────────────────────────────────────────────────────
 
-function Tab({ label, active, onClose, onClick, onContextMenu, onRename }: {
+function Tab({ label, active, color, onClose, onClick, onContextMenu, onRename }: {
   label: string; active: boolean; onClose?: () => void; onClick: () => void;
+  color?: KubeContextSetting['color'];
   onContextMenu?: (e: React.MouseEvent) => void; onRename?: (label: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -116,15 +125,15 @@ function Tab({ label, active, onClose, onClick, onContextMenu, onRename }: {
       onClick={onClick}
       onContextMenu={onContextMenu}
       onDoubleClick={onRename ? () => { setDraft(label); setEditing(true); } : undefined}
-      className={`k8s-tab${active ? ' is-active' : ''}`}
+      className={`k8s-tab${active ? ' is-active' : ''}${color ? ` is-context-color-${color}` : ''}`}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         padding: '4px 8px 4px 12px', fontSize: 12, cursor: 'pointer',
         borderTopLeftRadius: 6, borderTopRightRadius: 6,
         border: `1px solid ${active ? 'var(--border-strong)' : 'var(--border)'}`,
         borderBottom: active ? '1px solid var(--bg-primary)' : '1px solid var(--border)',
-        background: active ? 'var(--bg-secondary)' : 'transparent',
-        color: active ? 'var(--text-primary)' : 'var(--text-dim)',
+        background: color ? undefined : active ? 'var(--bg-secondary)' : 'transparent',
+        color: color ? undefined : active ? 'var(--text-primary)' : 'var(--text-dim)',
         fontWeight: active ? 600 : 400,
         whiteSpace: 'nowrap', maxWidth: 240, overflow: 'hidden',
         userSelect: 'none',
@@ -162,11 +171,13 @@ function KubeMenuIcon({ name }: { name: KubeMenuIconName }) {
   return <svg className="repo-context-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 
-function ResourceMenuItem({ label, icon, onClick, danger = false }: { label: string; icon: KubeMenuIconName; onClick: () => void; danger?: boolean }) {
+function ResourceMenuItem({ label, icon, onClick, danger = false, disabled = false, title }: { label: string; icon: KubeMenuIconName; onClick: () => void; danger?: boolean; disabled?: boolean; title?: string }) {
   return (
     <button
       type="button"
-      className={danger ? 'k8s-danger-menu-item' : undefined}
+      className={`${danger ? 'k8s-danger-menu-item ' : ''}${disabled ? 'is-disabled' : ''}`}
+      disabled={disabled}
+      title={title}
       onClick={onClick}
     >
       <KubeMenuIcon name={icon} /><span>{label}</span>
@@ -295,8 +306,9 @@ function podMatchesAgeFilter(item: KubeResourceItem, filter: string): boolean {
   return durations[filter] == null || now - createdAt <= durations[filter];
 }
 
-function TabBar({ activeTab, contextTabs, workloadTabs, compareTab, activeContextTab, searchQuery, onSearchQueryChange, onPodFilterToggle, onPodAgeFilterChange, onWatchToggle, onWatchInterval, onRefresh, onActivate, onClose, onRenameTab, onContextMenu, fallbackCtx }: {
+function TabBar({ activeTab, contextTabs, workloadTabs, compareTab, activeContextTab, contextSettings, searchQuery, onSearchQueryChange, onPodFilterToggle, onPodAgeFilterChange, onWatchToggle, onWatchInterval, onRefresh, onActivate, onClose, onRenameTab, onContextMenu, fallbackCtx }: {
   activeTab: string; contextTabs: KubeContextTab[]; workloadTabs: KubeWorkloadTab[]; compareTab: KubeCompareTab | null;
+  contextSettings: KubeContextSettings;
   activeContextTab?: KubeContextTab; searchQuery: string;
   onSearchQueryChange: (query: string) => void;
   onPodFilterToggle: (tabId: string, category: string) => void;
@@ -318,6 +330,7 @@ function TabBar({ activeTab, contextTabs, workloadTabs, compareTab, activeContex
           key={t.id}
           label={t.label ?? t.context}
           active={activeTab === t.id}
+          color={contextSettings[t.context]?.color}
           onClose={() => onClose(t.id)}
           onClick={() => onActivate(t.id)}
           onRename={(l) => onRenameTab(t.id, l)}
@@ -329,6 +342,7 @@ function TabBar({ activeTab, contextTabs, workloadTabs, compareTab, activeContex
           key={t.id}
           label={t.label ?? `${t.namespace}/${t.name}`}
           active={activeTab === t.id}
+          color={contextSettings[t.context]?.color}
           onClose={() => onClose(t.id)}
           onClick={() => onActivate(t.id)}
           onRename={(l) => onRenameTab(t.id, l)}
@@ -806,14 +820,19 @@ function ResourceInspector({ item, kind, detail, description, loading, error, se
   );
 }
 
-function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onSilentRefresh, onStatusFilterChange, onSelect, onOpenWorkload, onOpenPod, onSelectContainer, onOpenContainerLogs, onClosePodDrilldown, onRowContextMenu, onViewResource }: {
+function ContextTabView({ tab, searchQuery, isProd, onNamespaceChange, onKindChange, onSilentRefresh, onStatusFilterChange, onSelect, onToggleSelectionMode, onToggleResourceSelection, onSelectVisibleResources, onRequestBulkAction, onOpenWorkload, onOpenPod, onSelectContainer, onOpenContainerLogs, onClosePodDrilldown, onRowContextMenu, onViewResource }: {
   tab: KubeContextTab;
   searchQuery: string;
+  isProd: boolean;
   onNamespaceChange: (tabId: string, ns: string) => void;
   onKindChange: (tabId: string, kind: string) => void;
   onSilentRefresh: (tabId: string) => void;
   onStatusFilterChange: (tabId: string, filter: string) => void;
   onSelect: (i: number) => void;
+  onToggleSelectionMode: (tabId: string) => void;
+  onToggleResourceSelection: (tabId: string, key: string) => void;
+  onSelectVisibleResources: (tabId: string, keys: string[], checked: boolean) => void;
+  onRequestBulkAction: (tabId: string, action: 'delete' | 'restart') => void;
   onOpenWorkload: (i: number) => void;
   onOpenPod: (i: number) => void;
   onSelectContainer: (i: number) => void;
@@ -823,6 +842,8 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
   onViewResource: (index: number) => Promise<KubeDeploymentDetail | string | null>;
 }) {
   const [loadingFrame, setLoadingFrame] = useState(0);
+  const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
+  const bulkMenuRef = useRef<HTMLDivElement>(null);
   const [inspectors, setInspectors] = useState<Array<{ id: string; index: number; detail: KubeDeploymentDetail | null; description: string; loading: boolean; error: string }>>([]);
   const [activeInspectorId, setActiveInspectorId] = useState('');
   const [cardSearch, setCardSearch] = useState('');
@@ -866,6 +887,25 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
     .map((item, index) => ({ item, index }))
     .filter(({ item }) => !showPodFilter || (visiblePods(item) && matchesStatus(item)))
     .filter(({ item }) => !query || [item.name, ...Object.values(item.cells)].some((value) => value.toLowerCase().includes(query)));
+  const canBulkSelect = tab.kind === 'pods' || tab.kind === 'deployments';
+  const selectionMode = canBulkSelect && Boolean(tab.selectionMode);
+  const selectedResourceKeys = tab.selectedResourceKeys ?? [];
+  const selectedKeySet = new Set(selectedResourceKeys);
+  const visibleKeys = items.map(({ item }) => item.key);
+  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeySet.has(key));
+  useEffect(() => {
+    if (!selectionMode || selectedResourceKeys.length === 0) setBulkMenuOpen(false);
+  }, [selectionMode, selectedResourceKeys.length]);
+  useEffect(() => {
+    if (!bulkMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!bulkMenuRef.current?.contains(event.target as Node)) setBulkMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [bulkMenuOpen]);
   const viewResource = async (index: number) => {
     const item = tab.resources.items[index];
     if (!item) return;
@@ -940,8 +980,9 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
           </div>
         )}
         {tab.kind === 'pods' && <PodStatusSummary summary={visiblePodStatus} loading={tab.loading || tab.refreshing} filter={statusFilter} onFilterChange={(filter) => onStatusFilterChange(tab.id, filter)} />}
-        <div style={{ flex: 1, minWidth: 0, padding: '7px 16px', overflowY: 'auto' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignContent: 'center', gap: 4, minHeight: 36 }}>
+        <div style={{ flex: 1, minWidth: 0, padding: '7px 16px', overflow: 'visible', position: 'relative', zIndex: 5 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center', gap: 5, minHeight: 36 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignContent: 'center', gap: 4 }}>
             {KUBE_RESOURCE_OPTIONS.map((option) => {
               const active = tab.kind === option.id;
               return (
@@ -961,7 +1002,24 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
                 </button>
               );
             })}
+            {canBulkSelect && selectionMode && selectedResourceKeys.length > 0 && <>
+              <span className="k8s-bulk-menu-separator" aria-hidden="true" />
+              <div className="k8s-bulk-menu-wrap" ref={bulkMenuRef}>
+              <button type="button" className={`k8s-bulk-menu-trigger${bulkMenuOpen ? ' is-open' : ''}`} aria-label="More resource actions" title="More resource actions" aria-haspopup="menu" aria-expanded={bulkMenuOpen} onClick={() => setBulkMenuOpen((open) => !open)}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+              </button>
+              {bulkMenuOpen && <div className="k8s-bulk-menu" role="menu" aria-label="Selected resource actions">
+                <div className="k8s-bulk-menu-caption">{selectionMode ? `${selectedResourceKeys.length} selected` : 'Press Shift+B to select resources'}</div>
+                <button type="button" role="menuitem" disabled={tab.kind !== 'deployments' || isProd} title={isProd ? 'Bulk actions are disabled for prod contexts.' : tab.kind !== 'deployments' ? 'Restart is available for deployment selections only.' : undefined} onClick={() => { setBulkMenuOpen(false); onRequestBulkAction(tab.id, 'restart'); }}>Restart</button>
+                <button type="button" role="menuitem" disabled={isProd} title={isProd ? 'Bulk actions are disabled for prod contexts.' : undefined} onClick={() => { setBulkMenuOpen(false); onRequestBulkAction(tab.id, 'delete'); }}>Delete</button>
+                {isProd && <div className="k8s-bulk-menu-note">Bulk actions are disabled for prod.</div>}
+                <div className="k8s-bulk-menu-divider" role="separator" />
+                <button type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onToggleSelectionMode(tab.id); }}>Exit selection</button>
+              </div>}
+              </div>
+            </>}
           </div>
+        </div>
         </div>
       </div>
 
@@ -994,6 +1052,7 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
         <div className="k8s-resource-table-wrap" aria-busy={tab.loading || tab.refreshing ? 'true' : 'false'}>
         <div className="table-container">
           <div className="table-header">
+            {selectionMode && <div className="cell k8s-resource-select-cell"><input type="checkbox" aria-label="Select all visible resources" checked={allVisibleSelected} onChange={(event) => onSelectVisibleResources(tab.id, visibleKeys, event.target.checked)} /></div>}
             <div className="cell" style={{ width: 36, flexShrink: 0 }}>#</div>
             {tab.resources.columns.map((c) => (
               <div className="cell" key={c.key} style={colStyle(c)}>{c.label}</div>
@@ -1002,16 +1061,18 @@ function ContextTabView({ tab, searchQuery, onNamespaceChange, onKindChange, onS
           </div>
           {items.map(({ item, index }, i) => {
             const selected = index === tab.selected;
+            const multiSelected = selectedKeySet.has(item.key);
             return (
               <div
                 key={item.key}
-                className={`table-row ${selected ? 'selected' : ''}`}
+                className={`table-row ${selected ? 'selected' : ''}${multiSelected ? ' is-multi-selected' : ''}`}
                 style={tab.kind === 'pods' ? podRowStyle(item.cells.status ?? '', item.cells.owner ?? '', selected) : undefined}
                 onClick={() => onSelect(index)}
                 onContextMenu={(e) => { e.preventDefault(); onSelect(index); onRowContextMenu(e, index); }}
-                onDoubleClick={() => { if (canOpenWorkload) onOpenWorkload(index); else if (canOpenPod) onOpenPod(index); }}
+                onDoubleClick={() => { if (selectionMode) return; if (canOpenWorkload) onOpenWorkload(index); else if (canOpenPod) onOpenPod(index); }}
                 title={canOpenWorkload ? 'Open workload in a new tab' : undefined}
               >
+                {selectionMode && <div className="cell k8s-resource-select-cell"><input type="checkbox" aria-label={`Select ${item.name}`} checked={multiSelected} onClick={(event) => event.stopPropagation()} onChange={() => onToggleResourceSelection(tab.id, item.key)} /></div>}
                 <div className="cell" style={{ width: 36, flexShrink: 0, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 5 }}>
                   {i + 1}
                   {item.loading && (
@@ -1407,6 +1468,34 @@ function WorkloadDetail({ tab, onClose, onSelectPod, onOpenPodLogs, onSelectCont
   );
 }
 
+export function KubeBulkConfirmDialog({ action, context, kindLabel, targets, onConfirm, onCancel }: {
+  action: 'delete' | 'restart';
+  context: string;
+  kindLabel: string;
+  targets: Array<{ name: string; namespace: string }>;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => { if (event.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onCancel]);
+  const verb = action === 'delete' ? 'Delete' : 'Restart';
+  return <div className="command-overlay" style={{ alignItems: 'center', paddingTop: 0 }} onClick={onCancel}>
+    <div className="k8s-bulk-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="k8s-bulk-confirm-title" onClick={(event) => event.stopPropagation()}>
+      <h2 id="k8s-bulk-confirm-title">{verb} {targets.length} {kindLabel.toLowerCase()}?</h2>
+      <p>Context: <strong>{context}</strong>. Review the resources before continuing.</p>
+      <div className="k8s-bulk-confirm-list">{targets.map((target) => <div key={`${target.namespace}/${target.name}`}><span>{target.namespace}/</span><strong>{target.name}</strong></div>)}</div>
+      <p className="k8s-bulk-confirm-note">Each resource is handled separately. If some requests fail, the successful operations will remain completed.</p>
+      <div className="k8s-bulk-confirm-actions">
+        <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="button" className={action === 'delete' ? 'is-danger' : 'is-primary'} onClick={onConfirm}>{verb} {targets.length}</button>
+      </div>
+    </div>
+  </div>;
+}
+
 export function KubeConfirmDialog({ message, title = 'Confirm deployment restart', warning = 'This updates the deployment pod template and triggers a rolling restart.', confirmLabel = 'Restart', onConfirm, onCancel }: {
   message: string;
   title?: string;
@@ -1443,6 +1532,50 @@ export function KubeConfirmDialog({ message, title = 'Confirm deployment restart
           <button autoFocus onClick={onConfirm} style={{ padding: '7px 13px', borderRadius: 5, background: 'linear-gradient(135deg, var(--accent-red), color-mix(in srgb, var(--accent-red) 72%, var(--bg-primary)))', border: '1px solid var(--accent-red)', color: '#fff', fontFamily: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>{confirmLabel}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+export function KubeProdConfirmDrawer({ context, namespace, name, kindLabel, actionLabel, warning, onConfirm, onCancel }: {
+  context: string;
+  namespace: string;
+  name: string;
+  kindLabel: string;
+  actionLabel: 'Delete' | 'Restart';
+  warning: string;
+  onConfirm: (typedName: string) => void;
+  onCancel: () => void;
+}) {
+  const [typedName, setTypedName] = useState('');
+  const matches = typedName === name;
+  return (
+    <div className="k8s-prod-confirm-backdrop" onClick={onCancel}>
+      <aside className="k8s-prod-confirm-drawer" role="dialog" aria-modal="true" aria-labelledby="k8s-prod-confirm-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel(); }
+      }}>
+        <header className="k8s-prod-confirm-heading">
+          <span className="k8s-prod-confirm-icon" aria-hidden="true">!</span>
+          <div><span className="k8s-prod-confirm-kicker">Production safeguard</span><h2 id="k8s-prod-confirm-title">{actionLabel} in production?</h2></div>
+          <button type="button" className="k8s-prod-confirm-close" aria-label="Close confirmation" onClick={onCancel}>×</button>
+        </header>
+        <div className="k8s-prod-confirm-body">
+          <p className="k8s-prod-confirm-warning">{warning}</p>
+          <dl className="k8s-prod-confirm-details">
+            <div><dt>Context</dt><dd>{context}</dd></div>
+            <div><dt>Environment</dt><dd><span className="k8s-prod-badge">PROD</span></dd></div>
+            <div><dt>Action</dt><dd>{actionLabel} {kindLabel.toLowerCase()}</dd></div>
+            <div><dt>Namespace</dt><dd>{namespace || '—'}</dd></div>
+            <div><dt>Resource</dt><dd>{name}</dd></div>
+          </dl>
+          <label className="k8s-prod-confirm-input-label" htmlFor="k8s-prod-confirm-name">Type the exact resource name to continue</label>
+          <input id="k8s-prod-confirm-name" autoFocus autoComplete="off" spellCheck={false} value={typedName} onChange={(event) => setTypedName(event.target.value)} placeholder={name} />
+          {typedName && !matches && <small className="k8s-prod-confirm-mismatch">Name does not match.</small>}
+        </div>
+        <footer className="k8s-prod-confirm-actions">
+          <button type="button" className="k8s-prod-cancel" onClick={onCancel}>Cancel</button>
+          <button type="button" className="k8s-prod-continue" disabled={!matches} onClick={() => onConfirm(typedName)}>{actionLabel} resource</button>
+        </footer>
+      </aside>
     </div>
   );
 }
@@ -1585,31 +1718,37 @@ export function KubeDescribeDialog({ title, json, query, error, onQueryChange, o
 // ─── Main view ──────────────────────────────────────────────────────────────
 
 export function K8sView({
-  contexts, contextTabs, activeTab, workloadTabs, compareTab, error, searchQuery, onSearchQueryChange,
-  onOpenContextTab, onTabNamespaceChange, onTabKindChange, onTabPodFilterToggle,
+  contexts, enabledContexts, contextSettings, contextTabs, activeTab, workloadTabs, compareTab, error, searchQuery, onSearchQueryChange,
+  onOpenContextTab, onRefreshContexts, onSaveContextSetting, onTabNamespaceChange, onTabKindChange, onTabPodFilterToggle,
   onTabPodAgeFilterChange, onTabPodStatusFilterChange,
   onTabWatchToggle, onTabWatchInterval, onRefreshTab, onSilentRefreshTab, onDescribeResource, onDeleteResource, onCopyResource, onViewResource, onRestartDeployment,
-  onSelect, onOpenWorkload, onOpenPod, onSelectContextContainer, onOpenContextContainerLogs, onClosePodDrilldown, onToggleLogWatch, onRefreshLogs, onDownloadLogs, onClearLogs, onToggleLogWrap, onSelectWorkloadPod, onOpenPodLogs, onSelectWorkloadContainer, onOpenContainerLogs, onCompareContext, onAddCompareContext, onRemoveCompareSide,
+  onSelect, onToggleSelectionMode, onToggleResourceSelection, onSelectVisibleResources, onRequestBulkAction, onOpenWorkload, onOpenPod, onSelectContextContainer, onOpenContextContainerLogs, onClosePodDrilldown, onToggleLogWatch, onRefreshLogs, onDownloadLogs, onClearLogs, onToggleLogWrap, onSelectWorkloadPod, onOpenPodLogs, onSelectWorkloadContainer, onOpenContainerLogs, onCompareContext, onAddCompareContext, onRemoveCompareSide,
   onActivateTab, onCloseTab, onRenameTab, onBack,
 }: K8sViewProps) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ctx: string } | null>(null);
   const [resourceMenu, setResourceMenu] = useState<{ x: number; y: number; index: number } | null>(null);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [contextMenuBusy, setContextMenuBusy] = useState(false);
+  const [contextMenuError, setContextMenuError] = useState('');
+  const [colorPickerContext, setColorPickerContext] = useState<string | null>(null);
   const closeMenu = () => setCtxMenu(null);
   const closeResourceMenu = () => setResourceMenu(null);
 
   const selectedContextTab = contextTabs.find((t) => t.id === activeTab);
   const activeContextTab = selectedContextTab ?? contextTabs[0];
+  const activeContextIsProd = activeContextTab ? contextSettings[activeContextTab.context]?.environment === 'prod' : false;
   const activeWorkloadTab = activeTab !== 'compare' && activeTab !== ''
     ? workloadTabs.find((t) => t.id === activeTab) ?? null
     : null;
 
   // Right-click menu: open context tabs first (tab labels), then the rest.
   const menuCtx = ctxMenu?.ctx ?? activeContextTab?.context ?? '';
-  const openOthers = contextTabs.filter((t) => t.context !== menuCtx);
+  const enabledNames = new Set(enabledContexts.map((context) => context.name));
+  const openOthers = contextTabs.filter((t) => t.context !== menuCtx && enabledNames.has(t.context));
   const openSet = new Set(openOthers.map((t) => t.context));
   const menuItems = [
     ...openOthers.map((t) => ({ name: t.context, label: t.label ?? t.context, open: true })),
-    ...contexts.filter((c) => c.name !== menuCtx && !openSet.has(c.name)).map((c) => ({ name: c.name, label: c.name, open: false })),
+    ...enabledContexts.filter((c) => c.name !== menuCtx && !openSet.has(c.name)).map((c) => ({ name: c.name, label: c.name, open: false })),
   ];
 
   const showCompareMenuFor = (e: React.MouseEvent, ctx: string) => {
@@ -1620,7 +1759,7 @@ export function K8sView({
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       {/* Title bar — open a context in its own tab; namespace lives inside the tab */}
-      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+      <div className="k8s-view-header" style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>Kubernetes</span>
         <select
           value={menuCtx}
@@ -1630,18 +1769,62 @@ export function K8sView({
           title="Context (select to open in a tab; right-click to compare)"
         >
           <option value="">— open context —</option>
-          {contexts.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+          {enabledContexts.map((c) => <option key={c.name} value={c.name}>{contextSettings[c.name]?.displayName || c.name}</option>)}
         </select>
         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>right-click tab to compare</span>
         <div style={{ flex: 1 }} />
+        <button type="button" className="k8s-context-menu-button" aria-label="Open Kubernetes contexts" title="Manage Kubernetes contexts" aria-expanded={contextMenuOpen} onClick={() => { setContextMenuOpen((open) => !open); setContextMenuError(''); }}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </button>
         <button className="back-btn" onClick={onBack} title="Back to repos">←</button>
+        {contextMenuOpen && <>
+          <button className="k8s-context-menu-dismiss" aria-label="Close contexts menu" onClick={() => setContextMenuOpen(false)} />
+          <section className="k8s-context-menu" aria-label="Kubernetes contexts" role="dialog" aria-modal="true">
+            <div className="k8s-context-menu-heading"><div><strong>Contexts</strong><small>Enable or disable context use in DeltaDot. Kubeconfig is unchanged.</small></div><button type="button" disabled={contextMenuBusy} onClick={async () => { setContextMenuBusy(true); setContextMenuError(''); try { await onRefreshContexts(); } catch (err) { setContextMenuError(err instanceof Error ? err.message : String(err)); } finally { setContextMenuBusy(false); } }}>{contextMenuBusy ? 'Refreshing…' : '↻ Refresh'}</button><button type="button" className="k8s-context-menu-close" aria-label="Close contexts drawer" onClick={() => setContextMenuOpen(false)}>×</button></div>
+            {contextMenuError && <div className="k8s-context-menu-error">{contextMenuError}</div>}
+            {contexts.length === 0 ? <div className="k8s-context-menu-empty">No contexts found in kubeconfig.</div> : <div className="k8s-context-menu-list">{contexts.map((context) => {
+              const setting = contextSettings[context.name] ?? { environment: 'non-prod' as const, enabled: true };
+              const isEnabled = setting.enabled !== false;
+              const displayName = setting.displayName || context.name;
+              const update = (next: KubeContextSetting) => { void onSaveContextSetting(context.name, next).catch((err) => setContextMenuError(err instanceof Error ? err.message : String(err))); };
+              return <div className={`k8s-context-menu-row${setting.color ? ` is-color-${setting.color}` : ''}`} key={context.name}>
+                <div className="k8s-context-menu-main">
+                  <button type="button" className={`k8s-context-menu-open${isEnabled ? '' : ' is-disabled'}`} title={context.name} disabled={!isEnabled} onClick={() => { onOpenContextTab(context.name); setContextMenuOpen(false); }}>
+                    <strong>{displayName}</strong><small>{context.current ? 'Current kubeconfig context' : context.name}{isEnabled ? '' : ' · Disabled in DeltaDot'}</small>
+                  </button>
+                  <div className="k8s-context-menu-controls">
+                    <select aria-label={`${displayName} environment`} value={setting.environment} onChange={(event) => update({ ...setting, environment: event.target.value as KubeContextSetting['environment'] })}>
+                      <option value="prod">Prod</option><option value="non-prod">Non-prod</option>
+                    </select>
+                    <button type="button" className={`k8s-context-color-button${setting.color ? ` has-color-${setting.color}` : ''}`} title="Choose row color" aria-label={`Choose row color for ${context.name}`} aria-expanded={colorPickerContext === context.name} onClick={() => setColorPickerContext((current) => current === context.name ? null : context.name)}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18h1.2a2 2 0 0 0 1.4-3.4 1.5 1.5 0 0 1 1.1-2.6H18a3 3 0 0 0 3-3c0-5-4-9-9-9Z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="15" cy="7.5" r="1"/></svg>
+                      <span className={`k8s-context-color-indicator${setting.color ? ` is-${setting.color}` : ''}`} />
+                    </button>
+                    <button type="button" className="k8s-context-rename-button" title="Set optional display name" aria-label={`Rename ${context.name}`} onClick={(event) => {
+                      const input = event.currentTarget.closest('.k8s-context-menu-row')?.querySelector<HTMLInputElement>('.k8s-context-rename-input');
+                      if (input) { input.hidden = false; input.focus(); input.select(); }
+                    }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button>
+                    <button type="button" className={`k8s-context-toggle${isEnabled ? ' is-enabled' : ''}`} role="switch" aria-checked={isEnabled} aria-label={`${isEnabled ? 'Disable' : 'Enable'} ${context.name} in DeltaDot`} title={`${isEnabled ? 'Disable' : 'Enable'} for DeltaDot only`} onClick={() => update({ ...setting, enabled: !isEnabled })}><span /></button>
+                  </div>
+                </div>
+                {colorPickerContext === context.name && <div className="k8s-context-color-options" role="radiogroup" aria-label={`Row color for ${displayName}`}>
+                  <button type="button" className={`k8s-context-color-swatch is-none${setting.color ? '' : ' is-selected'}`} role="radio" aria-checked={!setting.color} aria-label="No row color" title="None" onClick={() => { update({ ...setting, color: undefined }); setColorPickerContext(null); }}><span>None</span></button>
+                  {(['red', 'orange', 'yellow', 'green', 'blue', 'purple'] as const).map((color) => <button key={color} type="button" className={`k8s-context-color-swatch is-${color}${setting.color === color ? ' is-selected' : ''}`} role="radio" aria-checked={setting.color === color} aria-label={`${color[0]!.toUpperCase()}${color.slice(1)} row color`} title={color[0]!.toUpperCase() + color.slice(1)} onClick={() => { update({ ...setting, color }); setColorPickerContext(null); }} />)}
+                </div>}
+                <input className="k8s-context-rename-input" hidden aria-label={`Display name for ${context.name}`} defaultValue={setting.displayName ?? ''} placeholder={context.name} onKeyDown={(event) => { if (event.key === 'Enter') { update({ ...setting, displayName: event.currentTarget.value }); event.currentTarget.hidden = true; } else if (event.key === 'Escape') event.currentTarget.hidden = true; }} onBlur={(event) => { if (!event.currentTarget.hidden) { update({ ...setting, displayName: event.currentTarget.value }); event.currentTarget.hidden = true; } }} />
+              </div>;
+            })}</div>}
+          </section>
+        </>}
       </div>
+
 
       <TabBar
         activeTab={activeTab}
         contextTabs={contextTabs}
         workloadTabs={workloadTabs}
         compareTab={compareTab}
+        contextSettings={contextSettings}
         activeContextTab={selectedContextTab}
         searchQuery={searchQuery}
         onSearchQueryChange={onSearchQueryChange}
@@ -1700,7 +1883,7 @@ export function K8sView({
             {activeContextTab.kind === 'deployments' && <>
               <ResourceMenuItem icon="open" label="Open deployment details" onClick={() => { closeResourceMenu(); onOpenWorkload(resourceMenu.index); }} />
               <ResourceMenuItem icon="restart" label="Restart deployment" onClick={() => { closeResourceMenu(); onRestartDeployment(resourceMenu.index, false); }} />
-              <ResourceMenuItem icon="restart-all" label="Restart all deployments" onClick={() => { closeResourceMenu(); onRestartDeployment(resourceMenu.index, true); }} />
+              <ResourceMenuItem icon="restart-all" label={activeContextIsProd ? 'Restart all deployments · disabled for prod' : 'Restart all deployments'} disabled={activeContextIsProd} title={activeContextIsProd ? 'Bulk restart is unavailable for production contexts.' : undefined} onClick={() => { closeResourceMenu(); onRestartDeployment(resourceMenu.index, true); }} />
             </>}
             {activeContextTab.kind === 'pods' && <ResourceMenuItem icon="logs" label="Open pod containers" onClick={() => { closeResourceMenu(); onOpenPod(resourceMenu.index); }} />}
             <ResourceMenuItem icon="describe" label="Describe JSON" onClick={() => { closeResourceMenu(); onDescribeResource(resourceMenu.index); }} />
@@ -1725,7 +1908,7 @@ export function K8sView({
       ) : activeTab === 'compare' && compareTab ? (
         <CompareView
           compareTab={compareTab}
-          contexts={contexts}
+          contexts={enabledContexts}
           onAddCompareContext={onAddCompareContext}
           onRemoveCompareSide={onRemoveCompareSide}
           onClose={() => onCloseTab('compare')}
@@ -1749,6 +1932,7 @@ export function K8sView({
           key={`${activeContextTab.id}:${activeContextTab.kind}:${activeContextTab.namespace}`}
           tab={activeContextTab}
           searchQuery={searchQuery}
+          isProd={contextSettings[activeContextTab.context]?.environment === 'prod'}
           onNamespaceChange={onTabNamespaceChange}
           onKindChange={onTabKindChange}
           onSilentRefresh={onSilentRefreshTab}
@@ -1756,6 +1940,10 @@ export function K8sView({
           onViewResource={onViewResource}
           onRowContextMenu={(e, index) => setResourceMenu({ x: e.clientX, y: e.clientY, index })}
           onSelect={onSelect}
+          onToggleSelectionMode={onToggleSelectionMode}
+          onToggleResourceSelection={onToggleResourceSelection}
+          onSelectVisibleResources={onSelectVisibleResources}
+          onRequestBulkAction={onRequestBulkAction}
           onOpenWorkload={onOpenWorkload}
           onOpenPod={onOpenPod}
           onSelectContainer={onSelectContextContainer}

@@ -1,5 +1,5 @@
 import { exec } from 'child_process';
-import type { CommitEntry, CommitDetail, CommitFile, LatestCommit, RepoGitInfo, RepoState } from './types.js';
+import type { CommitEntry, CommitDetail, CommitFile, DeploymentTagComparison, LatestCommit, RepoGitInfo, RepoState } from './types.js';
 import { toUsername } from './utils.js';
 import { getLocalChanges } from './local-changes.js';
 
@@ -35,19 +35,61 @@ export async function fetchBranchCommits(repoPath: string, branch: string): Prom
   return fetchLatestCommits(repoPath, branch);
 }
 
-export async function countCommitsSinceTag(repoPath: string, branch: string): Promise<{ tag: string; count: number } | null> {
+const activeTagFetches = new Map<string, Promise<void>>();
+
+async function fetchComparisonBranch(repoPath: string, branch: string): Promise<void> {
+  const key = `${repoPath}\0${branch}`;
+  const existing = activeTagFetches.get(key);
+  if (existing) return existing;
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  const refspec = quote(`+refs/heads/${branch}:refs/remotes/origin/${branch}`);
+  const pending = run(`git fetch origin --quiet --tags ${refspec}`, repoPath).then(() => undefined);
+  activeTagFetches.set(key, pending);
+  try { await pending; }
+  finally { if (activeTagFetches.get(key) === pending) activeTagFetches.delete(key); }
+}
+
+export async function countCommitsSinceTag(repoPath: string, branch: string, deployedVersion = ''): Promise<DeploymentTagComparison | null> {
   const safeBranch = branch.trim().replace(/^refs\/heads\//, '');
   if (!safeBranch || safeBranch.startsWith('-')) return null;
+  const checkedAt = new Date().toISOString();
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  await run('git fetch origin --tags --quiet', repoPath).catch(() => '');
+  let fetchError: string | null = null;
+  try { await fetchComparisonBranch(repoPath, safeBranch); }
+  catch (reason) { fetchError = reason instanceof Error ? reason.message : String(reason); }
+  let latestTag = '';
+  let latestTagDate: string | null = null;
+  let previousTag: string | null = null;
+  let deployedTag: string | null = null;
   try {
     const branchRef = `origin/${safeBranch}`;
-    const tags = await run(`git for-each-ref --merged=${quote(branchRef)} --sort=-version:refname --format='%(refname:short)' refs/tags`, repoPath);
-    const latestTag = tags.split('\n')[0]?.trim();
-    if (!latestTag) return null;
-    const count = await run(`git rev-list --count ${quote(`${latestTag}..${branchRef}`)}`, repoPath);
-    return { tag: latestTag, count: Number.parseInt(count, 10) };
-  } catch { return null; }
+    const allTagsOut = await run("git for-each-ref --sort=-version:refname --format='%(refname:short)%09%(creatordate:iso-strict)' refs/tags", repoPath);
+    const allTags = allTagsOut.split('\n').map((line) => {
+      const [name = '', date = ''] = line.split('\t');
+      return { name: name.trim(), date: date.trim() || null };
+    }).filter((tag) => tag.name);
+    latestTag = allTags[0]?.name ?? '';
+    latestTagDate = allTags[0]?.date ?? null;
+    previousTag = allTags[1]?.name ?? null;
+    const normalized = (value: string) => value.trim().replace(/^v/i, '').toLowerCase();
+    deployedTag = deployedVersion ? allTags.find((tag) => normalized(tag.name) === normalized(deployedVersion))?.name ?? null : null;
+    if (!latestTag) return { count: 0, baseAheadCount: 0, baseBehindCount: 0, changed: false, previousTag, latestTag, latestTagDate, deployedTag, checkedBranch: safeBranch, status: 'error', error: 'No Git tags were found in this repository.', checkedAt };
+    const counts = await run(`git rev-list --left-right --count ${quote(`${latestTag}...${branchRef}`)}`, repoPath);
+    const [tagOnlyCount = '0', branchOnlyCount = '0'] = counts.split(/\s+/);
+    const baseBehindCount = Number.parseInt(tagOnlyCount, 10) || 0;
+    const baseAheadCount = Number.parseInt(branchOnlyCount, 10) || 0;
+    const count = baseAheadCount + baseBehindCount;
+    const changed = count > 0;
+    const error = fetchError ? `Could not refresh origin/${safeBranch}: ${fetchError}` : null;
+    // Deployment status is determined by the deployed tag. Branch/tag drift is
+    // still reported in the Changes column, but must not override a tag match.
+    const status = error ? 'error' : !deployedVersion ? 'unknown' : normalized(deployedVersion) === normalized(latestTag) ? 'synced' : changed ? 'changed' : 'not-synced';
+    return { count, baseAheadCount, baseBehindCount, changed, previousTag, latestTag, latestTagDate, deployedTag, checkedBranch: safeBranch, status, error, checkedAt };
+  } catch (reason) {
+    const detail = reason instanceof Error ? reason.message : String(reason);
+    const error = `Could not compare ${latestTag || 'the latest Git tag'} with origin/${safeBranch}: ${detail}`;
+    return { count: 0, baseAheadCount: 0, baseBehindCount: 0, changed: false, previousTag, latestTag, latestTagDate, deployedTag, checkedBranch: safeBranch, status: 'error', error, checkedAt };
+  }
 }
 
 export async function getRepoGitInfo(repoPath: string): Promise<RepoGitInfo> {
@@ -76,7 +118,7 @@ export async function getRepoGitInfo(repoPath: string): Promise<RepoGitInfo> {
 
 async function getLatestTag(repoPath: string): Promise<{ tag: string | null; date: string | null }> {
   try {
-    const out = await run("git for-each-ref --sort=-creatordate --format='%(refname:short)%09%(creatordate:iso-strict)' refs/tags", repoPath);
+    const out = await run("git for-each-ref --sort=-version:refname --format='%(refname:short)%09%(creatordate:iso-strict)' refs/tags", repoPath);
     const [tag, date] = out.split('\n')[0]?.split('\t') ?? [];
     return { tag: tag?.trim() || null, date: date?.trim() || null };
   } catch { return { tag: null, date: null }; }

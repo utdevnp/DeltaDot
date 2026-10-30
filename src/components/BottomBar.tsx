@@ -75,7 +75,13 @@ const KEYBINDINGS: Record<View, { key: string; desc: string }[]> = {
     { key: 'b / Esc', desc: 'close / back' },
     { key: 'q', desc: 'quit' },
   ],
-  mapping: [],
+  mapping: [
+    { key: '↑↓ j/k', desc: 'navigate' },
+    { key: 'd', desc: 'switch mapping table' },
+    { key: 'o', desc: 'open compare' },
+    { key: 'r', desc: 'refresh' },
+    { key: 'v', desc: 'mapping details' },
+  ],
 };
 
 export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
@@ -93,8 +99,8 @@ export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
       { key: 'b / Esc', desc: 'close / back' },
       { key: 'q', desc: 'quit' },
     ];
-    if (k8sMenuMode === 'deployments') keys = [...common.slice(0, 2), { key: 'w', desc: 'watch' }, { key: 'r', desc: 'restart deployment' }, { key: 'R', desc: 'restart all' }, { key: 'd', desc: 'describe JSON' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
-    else if (k8sMenuMode === 'pods') keys = [...common.slice(0, 2), { key: 'w', desc: 'watch' }, { key: 'r', desc: 'refresh' }, { key: 'd', desc: 'describe JSON' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
+    if (k8sMenuMode === 'deployments') keys = [...common.slice(0, 2), { key: 'Shift+B', desc: 'toggle selection' }, { key: 'w', desc: 'watch' }, { key: 'r', desc: 'restart deployment' }, { key: 'R', desc: 'restart all' }, { key: 'd', desc: 'describe JSON' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
+    else if (k8sMenuMode === 'pods') keys = [...common.slice(0, 2), { key: 'Shift+B', desc: 'toggle selection' }, { key: 'w', desc: 'watch' }, { key: 'r', desc: 'refresh' }, { key: 'd', desc: 'describe JSON' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
     else if (k8sMenuMode === 'jobs') keys = [...common.slice(0, 2), { key: 'r', desc: 'refresh' }, { key: 'd', desc: 'describe JSON' }, { key: '⌘/Ctrl+d', desc: 'delete resource' }, { key: 'r-click ctx', desc: 'compare' }, ...common.slice(2)];
     else if (k8sMenuMode === 'logs') keys = [...common.slice(0, 1), { key: 'w', desc: 'watch logs' }, { key: 'z', desc: 'wrap logs' }, ...common.slice(2)];
     else if (k8sMenuMode === 'pod-drilldown') keys = [...common.slice(0, 2), ...common.slice(2)];

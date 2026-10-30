@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind, DeploymentMappingTab } from '../core/types.js';
+import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeContextSettings, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind, DeploymentMappingTab } from '../core/types.js';
 import type { KubeActivityEntry } from './components/dashboard/types.js';
 import { summarizeKubePods } from '../core/k8s-compare.js';
 import { getVisibleConfigFields, KUBE_RESOURCE_OPTIONS, WORKSPACE_COLORS } from '../core/types.js';
@@ -14,7 +14,7 @@ import { PRsView } from './components/PRsView';
 import type { PRSearchResult, PRSearchViewState } from './components/PRsView';
 import { PRDetailView } from './components/PRDetailView';
 import { ReviewView } from './components/ReviewView';
-import { K8sView, KubeConfirmDialog, KubeDescribeDialog } from './components/K8sView';
+import { K8sView, KubeConfirmDialog, KubeProdConfirmDrawer, KubeDescribeDialog, KubeBulkConfirmDialog } from './components/K8sView';
 import { CommandBar } from './components/CommandBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { WorkspacePanel } from './components/WorkspacePanel';
@@ -108,12 +108,22 @@ function containerStatusMap(json: string): Record<string, string> {
 
 type KubeConfirmAction = {
   type: 'deployment' | 'all-deployments' | 'delete-resource';
+  productionGuard: boolean;
   context: string;
   namespace: string;
   name?: string;
   kind?: string;
   kindLabel?: string;
   tabId: string;
+};
+
+type KubeBulkConfirmAction = {
+  action: 'delete' | 'restart';
+  context: string;
+  kind: 'pods' | 'deployments';
+  kindLabel: string;
+  tabId: string;
+  targets: Array<{ key: string; name: string; namespace: string }>;
 };
 
 type StatusTone = 'success' | 'error' | 'warning';
@@ -210,12 +220,16 @@ export function App() {
 
   // Kubernetes state
   const [kubeContexts, setKubeContexts] = useState<KubeContext[]>([]);
+  const [kubeContextSettings, setKubeContextSettings] = useState<KubeContextSettings>({});
+  const kubeContextSettingsRef = useRef(kubeContextSettings);
+  kubeContextSettingsRef.current = kubeContextSettings;
   const [kubeContextTabs, setKubeContextTabs] = useState<KubeContextTab[]>([]);
   const [kubeWorkloadTabs, setKubeWorkloadTabs] = useState<KubeWorkloadTab[]>([]);
   const [kubeActiveTab, setKubeActiveTab] = useState(''); // '' | 'compare' | context/workload tab id
   const [kubeCompareTab, setKubeCompareTab] = useState<KubeCompareTab | null>(null);
   const [kubeError, setKubeError] = useState('');
   const [kubeConfirm, setKubeConfirm] = useState<KubeConfirmAction | null>(null);
+  const [kubeBulkConfirm, setKubeBulkConfirm] = useState<KubeBulkConfirmAction | null>(null);
   const [kubeDescription, setKubeDescription] = useState<{ title: string; json: string; query: string; error?: string } | null>(null);
   const kubeResourceRequestRef = useRef<Record<string, number>>({});
   const kubeResourceInFlightRef = useRef(new Set<string>());
@@ -557,14 +571,12 @@ export function App() {
       }
       return;
     }
-    // Kubernetes view — load contexts on first entry, otherwise show the first context tab
+    // Load contexts on first entry; keep the selected tab when returning.
     setKubeError('');
     if (kubeContextTabsRef.current.length === 0) {
       loadKubeContextsRef.current();
-    } else {
-      setKubeActiveTab(kubeContextTabsRef.current[0]!.id);
     }
-  }, [cfg, activeWorkspaceId, repos, kubeContextTabs.length]);
+  }, [cfg, activeWorkspaceId, repos]);
 
   // ─── Workspace Selection ──────────────────────────────────────────────────
 
@@ -1161,7 +1173,7 @@ export function App() {
       id: ctxName, context: ctxName, namespace: defaultNs, namespaces: [],
       kind: 'pods', resources: { kind: 'pods', columns: [], items: [] },
       podFilters: ['ReplicaSet'], podAgeFilter: 'all', watch: false, watchInterval: 2,
-      selected: 0, loading: true, error: '',
+      selected: 0, selectionMode: false, selectedResourceKeys: [], loading: true, error: '',
     };
     setKubeContextTabs((prev) => [...prev, tab]);
     if (activate) setKubeActiveTab(ctxName);
@@ -1182,19 +1194,64 @@ export function App() {
   const loadKubeContexts = useCallback(async () => {
     setKubeError('');
     try {
-      const ctxs = await window.api.k8sContexts();
+      const [ctxs, settings] = await Promise.all([window.api.k8sContexts(), window.api.loadKubeContextSettings()]);
       setKubeContexts(ctxs);
-      if (ctxs.length === 0) {
-        setKubeError('No Kubernetes contexts found in your kubeconfig (~/.kube/config). Add a cluster and try again.');
+      setKubeContextSettings(settings);
+      const enabled = ctxs.filter((context) => settings[context.name]?.enabled !== false);
+      if (enabled.length === 0) {
+        setKubeError(ctxs.length ? 'All Kubernetes contexts are disabled in DeltaDot. Enable one from the context menu.' : 'No Kubernetes contexts found in your kubeconfig (~/.kube/config). Add a cluster and try again.');
         return;
       }
       const saved = await window.api.loadKubeContext().catch(() => null);
-      const start = ctxs.find((c) => c.name === saved) ?? ctxs.find((c) => c.current) ?? ctxs[0]!;
+      const start = enabled.find((c) => c.name === saved) ?? enabled.find((c) => c.current) ?? enabled[0]!;
       await createKubeContextTab(start.name, true);
     } catch (err) {
       setKubeError(err instanceof Error ? err.message : String(err));
     }
   }, []);
+
+  const refreshKubeContexts = useCallback(async () => {
+    const discovered = await window.api.k8sContexts();
+    const existingNames = new Set(kubeContexts.map((context) => context.name));
+    const newContexts = discovered.filter((context) => !existingNames.has(context.name));
+    if (newContexts.length === 0) return;
+    const merged = [...kubeContexts, ...newContexts];
+    setKubeContexts(merged);
+    const enabled = merged.filter((context) => kubeContextSettings[context.name]?.enabled !== false);
+    setKubeError(enabled.length ? '' : 'All Kubernetes contexts are disabled in DeltaDot. Enable one from the context menu.');
+  }, [kubeContexts, kubeContextSettings]);
+
+  const saveKubeContextSetting = useCallback(async (contextName: string, setting: KubeContextSettings[string]) => {
+    const next = { ...kubeContextSettings, [contextName]: { ...setting, enabled: setting.enabled !== false, displayName: setting.displayName?.trim() || undefined } };
+    setKubeContextSettings(next);
+    try { await window.api.saveKubeContextSettings(next); }
+    catch (err) {
+      setKubeContextSettings(kubeContextSettings);
+      throw err;
+    }
+    if (setting.enabled === false) {
+      const remainingContextTabs = kubeContextTabsRef.current.filter((tab) => tab.context !== contextName);
+      const removedWorkloads = kubeWorkloadTabsRef.current.filter((tab) => tab.context === contextName);
+      const remainingWorkloads = kubeWorkloadTabsRef.current.filter((tab) => tab.context !== contextName);
+      for (const tab of removedWorkloads) if (tab.mode === 'pod-logs') void window.api.k8sPodLogStreamStop(tab.id);
+      setKubeContextTabs(remainingContextTabs);
+      setKubeWorkloadTabs(remainingWorkloads);
+      setKubeCompareTab((previous) => {
+        if (!previous) return previous;
+        const sides = previous.sides.filter((side) => side.context !== contextName);
+        return sides.length >= 2 ? { ...previous, sides } : null;
+      });
+      const fallback = remainingContextTabs[0]?.id ?? remainingWorkloads[0]?.id ?? '';
+      if (kubeActiveTabRef.current === 'compare') {
+        if ((kubeCompareTabRef.current?.sides.filter((side) => side.context !== contextName).length ?? 0) < 2) setKubeActiveTab(fallback);
+      } else if (kubeContextTabsRef.current.some((tab) => tab.id === kubeActiveTabRef.current && tab.context === contextName)
+        || removedWorkloads.some((tab) => tab.id === kubeActiveTabRef.current)) setKubeActiveTab(fallback);
+      const enabledCount = kubeContextsRef.current.filter((context) => context.name !== contextName && next[context.name]?.enabled !== false).length;
+      setKubeError(enabledCount ? '' : 'All Kubernetes contexts are disabled in DeltaDot. Enable one from the context menu.');
+    } else {
+      setKubeError('');
+    }
+  }, [kubeContextSettings]);
 
   // Open (or activate) a context in its own tab; remember it as the last selected context.
   const openKubeContextTab = useCallback(async (ctxName: string) => {
@@ -1204,12 +1261,15 @@ export function App() {
 
   // Change the namespace of a context tab and reload its current resource list.
   const handleKubeTabNamespaceChange = useCallback(async (tabId: string, ns: string) => {
-    const kind = kubeContextTabsRef.current.find((t) => t.id === tabId)?.kind ?? 'deployments';
-    const hasRows = (kubeContextTabsRef.current.find((t) => t.id === tabId)?.resources.items.length ?? 0) > 0;
+    const priorTab = kubeContextTabsRef.current.find((t) => t.id === tabId);
+    const kind = priorTab?.kind ?? 'deployments';
+    const namespaceChanged = priorTab?.namespace !== ns;
+    const hasRows = (priorTab?.resources.items.length ?? 0) > 0;
     const requestId = beginKubeResourceRequest(tabId);
     setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
       ...t,
       namespace: ns,
+      ...(namespaceChanged ? { selectedResourceKeys: [] } : {}),
       loading: !hasRows,
       refreshing: hasRows,
       error: '',
@@ -1223,6 +1283,7 @@ export function App() {
       if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
         ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
+        selectedResourceKeys: namespaceChanged ? [] : (t.selectedResourceKeys ?? []).filter((key) => res.items.some((item) => item.key === key)),
         podStatus: summarizeKubePods(podRes?.items ?? res.items), selected: 0, loading: false, refreshing: false,
       } : t));
     } catch (err) {
@@ -1240,7 +1301,7 @@ export function App() {
     const hasRows = (kubeContextTabsRef.current.find((t) => t.id === tabId)?.resources.items.length ?? 0) > 0;
     const requestId = beginKubeResourceRequest(tabId);
     setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-      ...t, kind, loading: !hasRows, refreshing: hasRows, error: '',
+      ...t, kind, selectedResourceKeys: [], loading: !hasRows, refreshing: hasRows, error: '',
       resources: hasRows ? { ...t.resources, items: t.resources.items.map((item) => ({ ...item, loading: true })) } : t.resources,
     } : t));
     try {
@@ -1250,7 +1311,7 @@ export function App() {
       ]);
       if (!isCurrentKubeResourceRequest(tabId, requestId)) return;
       setKubeContextTabs((prev) => prev.map((t) => t.id === tabId ? {
-        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
+        ...t, resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) }, selectedResourceKeys: [],
         podStatus: summarizeKubePods(podRes?.items ?? res.items), selected: 0, loading: false, refreshing: false,
       } : t));
     } catch (err) {
@@ -1323,6 +1384,7 @@ export function App() {
         ...t,
         refreshing: false,
         resources: { ...res, items: res.items.map((item) => ({ ...item, loading: false })) },
+        selectedResourceKeys: (t.selectedResourceKeys ?? []).filter((key) => res.items.some((item) => item.key === key)),
         podStatus: summarizeKubePods(podRes?.items ?? res.items),
         selected: res.items.length > 0 ? Math.min(t.selected, res.items.length - 1) : 0,
       } : t));
@@ -1343,38 +1405,139 @@ export function App() {
     setKubeContextTabs((prev) => prev.map((t) => t.id === kubeActiveTabRef.current ? { ...t, selected: i } : t));
   }, []);
 
+  const toggleKubeSelectionMode = useCallback((tabId: string) => {
+    setKubeContextTabs((prev) => prev.map((tab) => tab.id === tabId ? {
+      ...tab,
+      selectionMode: !tab.selectionMode,
+      selectedResourceKeys: tab.selectionMode ? [] : (tab.selectedResourceKeys ?? []),
+    } : tab));
+  }, []);
+
+  const toggleKubeResourceSelection = useCallback((tabId: string, key: string) => {
+    setKubeContextTabs((prev) => prev.map((tab) => {
+      if (tab.id !== tabId) return tab;
+      const selected = new Set(tab.selectedResourceKeys ?? []);
+      if (selected.has(key)) selected.delete(key); else selected.add(key);
+      return { ...tab, selectedResourceKeys: [...selected] };
+    }));
+  }, []);
+
+  const selectVisibleKubeResources = useCallback((tabId: string, keys: string[], checked: boolean) => {
+    setKubeContextTabs((prev) => prev.map((tab) => {
+      if (tab.id !== tabId) return tab;
+      const selected = new Set(tab.selectedResourceKeys ?? []);
+      for (const key of keys) if (checked) selected.add(key); else selected.delete(key);
+      return { ...tab, selectedResourceKeys: [...selected] };
+    }));
+  }, []);
+
+  const requestKubeBulkAction = useCallback((tabId: string, action: 'delete' | 'restart') => {
+    const tab = kubeContextTabsRef.current.find((item) => item.id === tabId);
+    if (!tab || (tab.kind !== 'pods' && tab.kind !== 'deployments')) return;
+    if (action === 'restart' && tab.kind !== 'deployments') return;
+    if (kubeContextSettingsRef.current[tab.context]?.environment === 'prod') {
+      showStatus('Bulk actions are disabled for prod contexts.', true);
+      return;
+    }
+    const selected = new Set(tab.selectedResourceKeys ?? []);
+    const targets = tab.resources.items.filter((item) => selected.has(item.key)).map((item) => ({
+      key: item.key,
+      name: item.name,
+      namespace: item.namespace,
+    }));
+    if (targets.length === 0) return;
+    setKubeBulkConfirm({
+      action,
+      context: tab.context,
+      kind: tab.kind,
+      kindLabel: KUBE_RESOURCE_OPTIONS.find((option) => option.id === tab.kind)?.label ?? tab.kind,
+      tabId,
+      targets,
+    });
+  }, [showStatus]);
+
+  const confirmKubeBulkAction = useCallback(async () => {
+    const action = kubeBulkConfirm;
+    if (!action) return;
+    if (kubeContextSettingsRef.current[action.context]?.environment === 'prod') {
+      setKubeBulkConfirm(null);
+      showStatus('Bulk actions are disabled for prod contexts.', true);
+      return;
+    }
+    setKubeBulkConfirm(null);
+    const completed: string[] = [];
+    const failures: Array<{ target: string; message: string }> = [];
+    for (const target of action.targets) {
+      try {
+        if (action.action === 'delete') {
+          await window.api.k8sDeleteResource(action.context, target.namespace, action.kind, target.name);
+        } else {
+          await window.api.k8sRestartDeployment(action.context, target.namespace, target.name);
+        }
+        completed.push(target.key);
+      } catch (err) {
+        failures.push({ target: `${target.namespace ? `${target.namespace}/` : ''}${target.name}`, message: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    setKubeContextTabs((prev) => prev.map((tab) => tab.id === action.tabId
+      ? { ...tab, selectionMode: false, selectedResourceKeys: [] }
+      : tab));
+    refreshKubeTabRef.current(action.tabId);
+    const operation = action.action === 'delete' ? 'deleted' : 'restarted';
+    const failureByTarget = new Map(failures.map((failure) => [failure.target, failure.message]));
+    const results = action.targets.map((target) => {
+      const label = `${target.namespace ? `${target.namespace}/` : ''}${target.name}`;
+      const failure = failureByTarget.get(label);
+      return failure ? `Failed · ${label}: ${failure}` : `Success · ${label} ${operation}`;
+    });
+    showStatus(`${completed.length} ${operation}; ${failures.length} failed.\n${results.join('\n')}`, failures.length > 0);
+  }, [kubeBulkConfirm, showStatus]);
+
   const requestKubeRestart = useCallback((all: boolean) => {
     const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
     if (!tab || tab.kind !== 'deployments') return;
+    const productionGuard = kubeContextSettingsRef.current[tab.context]?.environment === 'prod';
+    if (all && productionGuard) {
+      showStatus('Restart all deployments is disabled for prod contexts.', true);
+      return;
+    }
     const row = tab.resources.items[tab.selected];
     if (!all && !row) return;
     setKubeConfirm({
       type: all ? 'all-deployments' : 'deployment',
+      productionGuard,
       context: tab.context,
       namespace: tab.namespace,
       name: row?.name,
       tabId: tab.id,
     });
-  }, []);
+  }, [showStatus]);
 
   const requestKubeRestartAt = useCallback((index: number, all: boolean) => {
     const tab = kubeContextTabsRef.current.find((t) => t.id === kubeActiveTabRef.current);
     if (!tab || tab.kind !== 'deployments') return;
+    const productionGuard = kubeContextSettingsRef.current[tab.context]?.environment === 'prod';
+    if (all && productionGuard) {
+      showStatus('Restart all deployments is disabled for prod contexts.', true);
+      return;
+    }
     const row = tab.resources.items[index];
     if (!all && !row) return;
     setKubeConfirm({
       type: all ? 'all-deployments' : 'deployment',
+      productionGuard,
       context: tab.context,
       namespace: tab.namespace,
       name: row?.name,
       tabId: tab.id,
     });
-  }, []);
+  }, [showStatus]);
 
-  const confirmKubeRestart = useCallback(async () => {
+  const confirmKubeRestart = useCallback(async (typedName?: string) => {
     const action = kubeConfirm;
-    setKubeConfirm(null);
     if (!action) return;
+    if (action.productionGuard && (action.type === 'all-deployments' || typedName !== action.name)) return;
+    setKubeConfirm(null);
     try {
       if (action.type === 'delete-resource' && action.name && action.kind) {
         await window.api.k8sDeleteResource(action.context, action.namespace, action.kind as any, action.name);
@@ -1398,7 +1561,7 @@ export function App() {
     const row = tab.resources.items[tab.selected];
     if (!row) return;
     const kindLabel = KUBE_RESOURCE_OPTIONS.find((option) => option.id === tab.kind)?.label ?? tab.kind;
-    setKubeConfirm({ type: 'delete-resource', context: tab.context, namespace: row.namespace, name: row.name, kind: tab.kind, kindLabel, tabId: tab.id });
+    setKubeConfirm({ type: 'delete-resource', productionGuard: kubeContextSettingsRef.current[tab.context]?.environment === 'prod', context: tab.context, namespace: row.namespace, name: row.name, kind: tab.kind, kindLabel, tabId: tab.id });
   }, []);
 
   const requestKubeResourceDeleteAt = useCallback((index: number) => {
@@ -1407,7 +1570,7 @@ export function App() {
     const row = tab.resources.items[index];
     if (!row) return;
     const kindLabel = KUBE_RESOURCE_OPTIONS.find((option) => option.id === tab.kind)?.label ?? tab.kind;
-    setKubeConfirm({ type: 'delete-resource', context: tab.context, namespace: row.namespace, name: row.name, kind: tab.kind, kindLabel, tabId: tab.id });
+    setKubeConfirm({ type: 'delete-resource', productionGuard: kubeContextSettingsRef.current[tab.context]?.environment === 'prod', context: tab.context, namespace: row.namespace, name: row.name, kind: tab.kind, kindLabel, tabId: tab.id });
   }, []);
 
   const copyKubeResourceAt = useCallback((index: number, qualified: boolean) => {
@@ -1527,9 +1690,13 @@ export function App() {
     if (!container) return;
     const id = `${tab.context}/${drilldown.namespace}/${drilldown.podName}/${container}/logs`;
     const existing = kubeWorkloadTabsRef.current.find((t) => t.id === id);
-    if (existing) { setKubeActiveTab(id); return; }
+    if (existing) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, sourceTabId: tab.id } : t));
+      setKubeActiveTab(id);
+      return;
+    }
     const logTab: KubeWorkloadTab = {
-      id, context: tab.context, name: drilldown.podName, namespace: drilldown.namespace,
+      id, sourceTabId: tab.id, context: tab.context, name: drilldown.podName, namespace: drilldown.namespace,
       label: `logs · ${container}`, mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
@@ -1640,11 +1807,12 @@ export function App() {
     const id = `${workload.context}/${pod.namespace}/${pod.name}/logs`;
     const existing = kubeWorkloadTabsRef.current.find((t) => t.id === id);
     if (existing) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, sourceTabId: workloadId } : t));
       setKubeActiveTab(id);
       return;
     }
     const logTab: KubeWorkloadTab = {
-      id, context: workload.context, name: pod.name, namespace: pod.namespace,
+      id, sourceTabId: workloadId, context: workload.context, name: pod.name, namespace: pod.namespace,
       label: container ? `logs · ${container}` : 'logs',
       mode: 'pod-logs', detail: null, container, label: container ? `logs · ${container}` : 'logs', logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
     };
@@ -1667,11 +1835,12 @@ export function App() {
     const id = `${containerTab.context}/${containerTab.namespace}/${containerTab.name}/${container}/logs`;
     const existing = kubeWorkloadTabsRef.current.find((t) => t.id === id);
     if (existing) {
+      setKubeWorkloadTabs((prev) => prev.map((t) => t.id === id ? { ...t, sourceTabId: containerTabId } : t));
       setKubeActiveTab(id);
       return;
     }
     const logTab: KubeWorkloadTab = {
-      id, context: containerTab.context, name: containerTab.name, namespace: containerTab.namespace,
+      id, sourceTabId: containerTabId, context: containerTab.context, name: containerTab.name, namespace: containerTab.namespace,
       mode: 'pod-logs', detail: null, container, logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
     };
     setKubeWorkloadTabs((prev) => [...prev, logTab]);
@@ -1690,8 +1859,10 @@ export function App() {
     setKubeError('');
     const namespace = entry.namespace || 'default';
     const id = `${entry.context}/${namespace}/${entry.name}/logs/dashboard-${Date.now()}`;
+    const sourceTabId = kubeContextTabsRef.current.find((tab) => tab.context === entry.context)?.id
+      ?? kubeContextTabsRef.current[0]?.id;
     const pendingLogTab: KubeWorkloadTab = {
-      id, context: entry.context, name: entry.name, namespace,
+      id, sourceTabId, context: entry.context, name: entry.name, namespace,
       label: 'logs', mode: 'pod-logs', detail: null, container: undefined,
       logs: '', watch: false, watchInterval: 2, wrap: false, loading: true, logsLoading: true,
     };
@@ -1849,7 +2020,11 @@ export function App() {
   }, []);
 
   const closeKubeTab = useCallback((id: string) => {
-    const fallbackId = () => kubeContextTabs[0]?.id ?? '';
+    const fallbackId = (sourceTabId?: string) => {
+      if (sourceTabId && (kubeContextTabs.some((tab) => tab.id === sourceTabId)
+        || kubeWorkloadTabs.some((tab) => tab.id === sourceTabId))) return sourceTabId;
+      return kubeContextTabs[0]?.id ?? '';
+    };
     if (id === 'compare') {
       setKubeCompareTab(null);
       if (kubeActiveTab === 'compare') setKubeActiveTab(fallbackId());
@@ -1858,20 +2033,11 @@ export function App() {
     if (kubeWorkloadTabs.some((t) => t.id === id)) {
       const closingWorkload = kubeWorkloadTabs.find((t) => t.id === id);
       if (closingWorkload?.mode === 'pod-logs' && typeof window.api.k8sPodLogStreamStop === 'function') void window.api.k8sPodLogStreamStop(id);
+      if (kubeActiveTab === id) setKubeActiveTab(fallbackId(closingWorkload?.sourceTabId));
       setKubeWorkloadTabs((prev) => {
         const next = prev.filter((t) => t.id !== id);
-        if (kubeActiveTab === id) setKubeActiveTab(fallbackId());
         return next;
       });
-      // A context pod drilldown is only needed while its log is open. Clear
-      // it when closing that log so the next pod starts with fresh state.
-      if (closingWorkload?.mode === 'pod-logs') {
-        setKubeContextTabs((prev) => prev.map((t) => t.context === closingWorkload.context
-          && t.podDrilldown?.podName === closingWorkload.name
-          && t.podDrilldown.namespace === closingWorkload.namespace
-          ? { ...t, podDrilldown: undefined }
-          : t));
-      }
       return;
     }
     // Context tab — keep at least one open.
@@ -2000,6 +2166,8 @@ export function App() {
   confirmKubeRestartRef.current = confirmKubeRestart;
   const requestKubeResourceDeleteRef = useRef(requestKubeResourceDelete);
   requestKubeResourceDeleteRef.current = requestKubeResourceDelete;
+  const toggleKubeSelectionModeRef = useRef(toggleKubeSelectionMode);
+  toggleKubeSelectionModeRef.current = toggleKubeSelectionMode;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2008,6 +2176,16 @@ export function App() {
         e.preventDefault();
         setKubeDescription(null);
         return;
+      }
+      if (view === 'k8s' && e.key === 'Escape') {
+        const activeContext = kubeContextTabs.find((tab) => tab.id === kubeActiveTab);
+        const activeWorkload = kubeWorkloadTabs.find((tab) => tab.id === kubeActiveTab);
+        if (!kubeConfirm && !kubeBulkConfirm && !showConfig && !showCloneDialog && !showAddWorkspace && !editWorkspace
+          && activeContext?.selectionMode && !activeContext.podDrilldown && kubeActiveTab !== 'compare' && !activeWorkload) {
+          e.preventDefault();
+          toggleKubeSelectionModeRef.current(activeContext.id);
+          return;
+        }
       }
       // Never hijack keys while typing in an input/select (tab rename, watch interval, …)
       const evtTarget = e.target as HTMLElement | null;
@@ -2024,6 +2202,10 @@ export function App() {
           e.preventDefault();
           confirmKubeRestartRef.current();
         }
+        return;
+      }
+      if (kubeBulkConfirm) {
+        if (e.key === 'Escape') { e.preventDefault(); setKubeBulkConfirm(null); }
         return;
       }
 
@@ -2156,8 +2338,6 @@ export function App() {
               setKubeError('');
               if (kubeContextTabsRef.current.length === 0) {
                 loadKubeContextsRef.current();
-              } else {
-                setKubeActiveTab(kubeContextTabsRef.current[0]!.id);
               }
               break;
             }
@@ -2463,6 +2643,12 @@ export function App() {
           const activeWorkload = kubeWorkloadTabs.find((t) => t.id === kubeActiveTab);
           const onContextList = !!ctxTab && kubeActiveTab !== 'compare' && !activeWorkload && !ctxTab.podDrilldown;
           switch (e.key) {
+            case 'B':
+              if (e.shiftKey && onContextList && (ctxTab.kind === 'pods' || ctxTab.kind === 'deployments')) {
+                e.preventDefault();
+                toggleKubeSelectionModeRef.current(ctxTab.id);
+              }
+              break;
             case 'j': case 'ArrowDown':
               e.preventDefault();
               if (onContextList) selectKubeDeployment(Math.min(ctxTab.selected + 1, ctxTab.resources.items.length - 1));
@@ -2530,7 +2716,11 @@ export function App() {
                 toggleKubeLogWrapRef.current(!activeWorkload.wrap);
               }
               break;
-            case 'b': case 'Escape':
+            case 'b':
+              if (ctxTab?.podDrilldown) closeKubePodDrilldownRef.current();
+              else closeActiveKubeTabRef.current();
+              break;
+            case 'Escape':
               if (ctxTab?.podDrilldown) closeKubePodDrilldownRef.current();
               else closeActiveKubeTabRef.current();
               break;
@@ -2545,7 +2735,7 @@ export function App() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext, kubeContexts, kubeContextTabs, kubeWorkloadTabs, kubeActiveTab, kubeConfirm, selectKubeDeployment]);
+  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext, kubeContexts, kubeContextTabs, kubeWorkloadTabs, kubeActiveTab, kubeConfirm, kubeBulkConfirm, selectKubeDeployment]);
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
@@ -2652,7 +2842,7 @@ export function App() {
             release={cfg.release}
             repos={repos.filter((repo) => !(cfg.ignoredRepos ?? []).includes(repo.path))}
             prs={prs}
-            kubeContexts={kubeContexts}
+            kubeContexts={kubeContexts.filter((context) => kubeContextSettings[context.name]?.enabled !== false)}
             kubeContextTabs={kubeContextTabs}
             lastSync={lastSync}
             prLastUpdated={lastPRSync}
@@ -3099,11 +3289,19 @@ export function App() {
             legacyMappings={cfg.deploymentMappings ?? []}
             preferredContext={cfg.mappingContext}
             preferredTabId={cfg.activeDeploymentMappingTab}
+            preferredDisplay={cfg.deploymentMappingView ?? 'all'}
             editing={mappingEditing}
             syncing={isSyncing}
             onEdit={() => setMappingEditing(true)}
             onCancel={() => setMappingEditing(false)}
             onOpenPR={openDashboardPRDetail}
+            onDisplayChange={(deploymentMappingView) => {
+              const nextCfg = { ...cfg, deploymentMappingView };
+              setCfg(nextCfg);
+              void (activeWorkspaceId
+                ? window.api.saveWorkspaceConfig(activeWorkspaceId, nextCfg)
+                : window.api.saveConfig(nextCfg));
+            }}
             onPersist={(deploymentMappingTabs: DeploymentMappingTab[], activeDeploymentMappingTab: string) => {
               const activeTab = deploymentMappingTabs.find((tab) => tab.id === activeDeploymentMappingTab);
               const nextCfg = {
@@ -3124,6 +3322,8 @@ export function App() {
         return (
           <K8sView
             contexts={kubeContexts}
+            enabledContexts={kubeContexts.filter((context) => kubeContextSettings[context.name]?.enabled !== false)}
+            contextSettings={kubeContextSettings}
             contextTabs={kubeContextTabs}
             activeTab={kubeActiveTab}
             workloadTabs={kubeWorkloadTabs}
@@ -3132,6 +3332,8 @@ export function App() {
             searchQuery={kubeSearchQuery}
             onSearchQueryChange={setKubeSearchQuery}
             onOpenContextTab={openKubeContextTab}
+            onRefreshContexts={refreshKubeContexts}
+            onSaveContextSetting={saveKubeContextSetting}
             onTabNamespaceChange={handleKubeTabNamespaceChange}
             onTabKindChange={handleKubeTabKindChange}
             onTabPodFilterToggle={handleKubeTabPodFilterToggle}
@@ -3147,6 +3349,10 @@ export function App() {
             onViewResource={viewKubeResourceAt}
             onRestartDeployment={requestKubeRestartAt}
             onSelect={selectKubeDeployment}
+            onToggleSelectionMode={toggleKubeSelectionMode}
+            onToggleResourceSelection={toggleKubeResourceSelection}
+            onSelectVisibleResources={selectVisibleKubeResources}
+            onRequestBulkAction={requestKubeBulkAction}
             onOpenWorkload={openKubeWorkload}
             onOpenPod={openKubeContextPod}
             onSelectContextContainer={selectKubeContextContainer}
@@ -3236,6 +3442,9 @@ export function App() {
               borderTop: statusTone === 'error' ? '1px solid var(--border-red)' : statusTone === 'warning' ? '1px solid var(--border-yellow)' : '1px solid var(--border-green)',
               color: statusTone === 'error' ? 'var(--accent-red)' : statusTone === 'warning' ? 'var(--accent-yellow)' : 'var(--accent-green)',
               fontSize: 12,
+              maxHeight: 112,
+              overflowY: 'auto',
+              whiteSpace: 'pre-wrap',
               flexShrink: 0,
               display: 'flex',
               alignItems: 'center',
@@ -3313,7 +3522,20 @@ export function App() {
         />
       )}
 
-      {kubeConfirm && (
+      {kubeConfirm?.productionGuard && kubeConfirm.type !== 'all-deployments' && kubeConfirm.name ? (
+        <KubeProdConfirmDrawer
+          context={kubeConfirm.context}
+          namespace={kubeConfirm.namespace}
+          name={kubeConfirm.name}
+          kindLabel={kubeConfirm.type === 'delete-resource' ? kubeConfirm.kindLabel ?? 'Resource' : 'Deployment'}
+          actionLabel={kubeConfirm.type === 'delete-resource' ? 'Delete' : 'Restart'}
+          warning={kubeConfirm.type === 'delete-resource'
+            ? 'This permanently deletes the selected production resource and cannot be undone.'
+            : 'This triggers a rolling restart of the production deployment.'}
+          onConfirm={confirmKubeRestart}
+          onCancel={() => setKubeConfirm(null)}
+        />
+      ) : kubeConfirm && (
         <KubeConfirmDialog
           title={kubeConfirm.type === 'delete-resource' ? `Confirm ${kubeConfirm.kindLabel?.toLowerCase() ?? 'resource'} deletion` : 'Confirm deployment restart'}
           message={kubeConfirm.type === 'all-deployments'
@@ -3329,6 +3551,15 @@ export function App() {
           onCancel={() => setKubeConfirm(null)}
         />
       )}
+
+      {kubeBulkConfirm && <KubeBulkConfirmDialog
+        action={kubeBulkConfirm.action}
+        context={kubeBulkConfirm.context}
+        kindLabel={kubeBulkConfirm.kindLabel}
+        targets={kubeBulkConfirm.targets}
+        onConfirm={confirmKubeBulkAction}
+        onCancel={() => setKubeBulkConfirm(null)}
+      />}
 
       {kubeDescription && (
         <KubeDescribeDialog

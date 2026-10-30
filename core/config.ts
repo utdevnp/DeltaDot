@@ -165,6 +165,7 @@ export function resolveCliConfig(cliOpts: { path?: string; base?: string; releas
     aiSystemPrompt: savedCfg.aiSystemPrompt ?? 'You are a senior software engineer conducting a code review. Review the provided PR changes against the Jira ticket description. Focus on correctness, performance, edge cases, and code style. Provide concise, actionable feedback.',
     theme:        savedCfg.theme        ?? 'system',
     defaultView:  savedCfg.defaultView  ?? 'list',
+    deploymentMappingView: savedCfg.deploymentMappingView ?? 'all',
   };
 
   if (!existsSync(finalCfg.workspace)) {

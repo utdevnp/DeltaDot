@@ -51,7 +51,11 @@ export function useKubernetesDashboardData(contexts: KubeContext[], contextTabs:
     setError(false);
     const load = async () => {
       try {
-        const availableContexts = contexts.length > 0 ? contexts : await window.api.k8sContexts();
+        let availableContexts = contexts;
+        if (availableContexts.length === 0) {
+          const [configured, settings] = await Promise.all([window.api.k8sContexts(), window.api.loadKubeContextSettings()]);
+          availableContexts = configured.filter((context) => settings[context.name]?.enabled !== false);
+        }
         if (availableContexts.length === 0) throw new Error('No Kubernetes contexts available.');
 
         const results = await Promise.all(availableContexts.map(async (context) => {

@@ -46,6 +46,7 @@ export interface AppConfig {
   mappingContext?: string;
   deploymentMappingTabs?: DeploymentMappingTab[];
   activeDeploymentMappingTab?: string;
+  deploymentMappingView?: 'all' | 'domain';
 }
 
 export interface DeploymentMapping {
@@ -57,6 +58,28 @@ export interface DeploymentMapping {
   imageVersionOverride?: string;
   baseBranch?: string;
   noRepo?: boolean;
+  domainIds?: string[];
+  comparison?: DeploymentTagComparison;
+}
+
+export interface DeploymentMappingDomain {
+  id: string;
+  name: string;
+}
+
+export interface DeploymentTagComparison {
+  count: number;
+  baseAheadCount: number;
+  baseBehindCount: number;
+  changed: boolean;
+  previousTag: string | null;
+  latestTag: string;
+  latestTagDate: string | null;
+  deployedTag: string | null;
+  checkedBranch: string;
+  status: 'changed' | 'not-synced' | 'synced' | 'error' | 'unknown';
+  error: string | null;
+  checkedAt: string;
 }
 
 export interface DeploymentMappingTab {
@@ -64,6 +87,7 @@ export interface DeploymentMappingTab {
   name: string;
   context: string;
   mappings: DeploymentMapping[];
+  domains?: DeploymentMappingDomain[];
   deploymentSnapshot?: KubeDeploymentSummary[];
 }
 
@@ -124,6 +148,7 @@ export interface RepoState {
   releaseAheadCount?: number | null;
   lastSyncedAt?: string;
 }
+
 
 export interface RepoGitInfo {
   currentBranch: string;
@@ -325,6 +350,14 @@ export interface KubeContext {
   current: boolean;
 }
 
+export interface KubeContextSetting {
+  displayName?: string;
+  environment: 'prod' | 'non-prod';
+  enabled?: boolean;
+  color?: 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple';
+}
+export type KubeContextSettings = Record<string, KubeContextSetting>;
+
 export interface KubeDeploymentSummary {
   name: string;
   namespace: string;
@@ -415,6 +448,7 @@ export interface KubeDiffSection {
 
 export interface KubeWorkloadTab {
   id: string; // `${namespace}/${name}`
+  sourceTabId?: string; // tab to return to when this is a pod-logs tab
   context: string;
   name: string;
   namespace: string;
@@ -475,6 +509,8 @@ export interface KubeContextTab {
   watch: boolean; // live watch mode: poll the current resource table
   watchInterval: number; // seconds between polls (default 2)
   selected: number;
+  selectionMode?: boolean;
+  selectedResourceKeys?: string[];
   loading: boolean;
   refreshing?: boolean;
   podStatus?: KubePodStatusSummary;

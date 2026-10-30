@@ -51,7 +51,7 @@
         "zip"
       ],
       "category": "public.app-category.developer-tools",
-      "icon": "build/icon.png",
+      "icon": "build/deltadot-logo.png",
       "identity": null,
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",

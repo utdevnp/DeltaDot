@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { homedir } from 'os';
-import type { AppConfig, RepoState, RepoGitInfo, CacheFile, Provider, CommitDetail, PRDetail, PRPage, JiraIssue, Workspace, KubeContext, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceKind, KubeResourceList, LocalChangesSnapshot, ForceFetchPreflight, ForceFetchProgress } from '../core/types.js';
+import type { AppConfig, RepoState, RepoGitInfo, DeploymentTagComparison, CacheFile, Provider, CommitDetail, PRDetail, PRPage, JiraIssue, Workspace, KubeContext, KubeContextSettings, KubeDeploymentSummary, KubeDeploymentDetail, KubeResourceKind, KubeResourceList, LocalChangesSnapshot, ForceFetchPreflight, ForceFetchProgress } from '../core/types.js';
 
 export interface DeltaDotAPI {
   homeDir: string;
@@ -16,7 +16,7 @@ export interface DeltaDotAPI {
   syncAllRepos: (repoPaths: string[], base: string, release: string) => Promise<RepoState[]>;
   getLocalChanges: (repoPath: string) => Promise<LocalChangesSnapshot>;
   getRepoGitInfo: (repoPath: string) => Promise<RepoGitInfo>;
-  countCommitsSinceTag: (repoPath: string, branch: string) => Promise<{ tag: string; count: number } | null>;
+  countCommitsSinceTag: (repoPath: string, branch: string, deployedVersion?: string) => Promise<DeploymentTagComparison | null>;
   removeRepoFolder: (repoPath: string) => Promise<void>;
   inspectForceFetch: (repoPath: string) => Promise<ForceFetchPreflight>;
   forceReplaceRepo: (operationId: string, repoPath: string, remoteUrl: string, base: string, release: string, onProgress: (progress: ForceFetchProgress) => void) => Promise<RepoState>;
@@ -59,6 +59,8 @@ export interface DeltaDotAPI {
   saveWorkspaceConfig: (id: string, config: AppConfig) => Promise<void>;
   saveWorkspaces: (wsList: Workspace[]) => Promise<void>;
   k8sContexts: () => Promise<KubeContext[]>;
+  loadKubeContextSettings: () => Promise<KubeContextSettings>;
+  saveKubeContextSettings: (settings: KubeContextSettings) => Promise<void>;
   k8sNamespaces: (contextName: string) => Promise<string[]>;
   k8sDeployments: (contextName: string, namespace: string) => Promise<KubeDeploymentSummary[]>;
   k8sDeploymentDetail: (contextName: string, namespace: string, name: string) => Promise<KubeDeploymentDetail>;
@@ -93,7 +95,7 @@ const api: DeltaDotAPI = {
   syncAllRepos: (repoPaths, base, release) => ipcRenderer.invoke('sync-all-repos', repoPaths, base, release),
   getLocalChanges: (repoPath) => ipcRenderer.invoke('get-local-changes', repoPath),
   getRepoGitInfo: (repoPath) => ipcRenderer.invoke('get-repo-git-info', repoPath),
-  countCommitsSinceTag: (repoPath, branch) => ipcRenderer.invoke('count-commits-since-tag', repoPath, branch),
+  countCommitsSinceTag: (repoPath, branch, deployedVersion) => ipcRenderer.invoke('count-commits-since-tag', repoPath, branch, deployedVersion),
   removeRepoFolder: (repoPath) => ipcRenderer.invoke('remove-repo-folder', repoPath),
   inspectForceFetch: (repoPath) => ipcRenderer.invoke('inspect-force-fetch', repoPath),
   forceReplaceRepo: (operationId, repoPath, remoteUrl, base, release, onProgress) => {
@@ -158,6 +160,8 @@ const api: DeltaDotAPI = {
   saveWorkspaceConfig: (id, config) => ipcRenderer.invoke('save-workspace-config', id, config),
   saveWorkspaces: (wsList) => ipcRenderer.invoke('save-workspaces', wsList),
   k8sContexts: () => ipcRenderer.invoke('k8s-contexts'),
+  loadKubeContextSettings: () => ipcRenderer.invoke('k8s-context-settings'),
+  saveKubeContextSettings: (settings) => ipcRenderer.invoke('save-k8s-context-settings', settings),
   k8sNamespaces: (contextName) => ipcRenderer.invoke('k8s-namespaces', contextName),
   k8sDeployments: (contextName, namespace) => ipcRenderer.invoke('k8s-deployments', contextName, namespace),
   k8sDeploymentDetail: (contextName, namespace, name) => ipcRenderer.invoke('k8s-deployment-detail', contextName, namespace, name),
