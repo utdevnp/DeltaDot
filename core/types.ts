@@ -89,6 +89,8 @@ export interface DeploymentMappingTab {
   mappings: DeploymentMapping[];
   domains?: DeploymentMappingDomain[];
   deploymentSnapshot?: KubeDeploymentSummary[];
+  lastReleaseContext?: string;
+  lastReleaseDeploymentSnapshot?: KubeDeploymentSummary[];
 }
 
 export interface CommitEntry {

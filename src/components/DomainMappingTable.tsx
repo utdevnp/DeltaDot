@@ -45,9 +45,9 @@ function normalizeVersion(value: string): string {
   return value.trim().replace(/^v/i, '').toLowerCase();
 }
 
-function imageAge(deployment?: DeploymentOption): string {
+function imageAge(deployment?: KubeDeploymentSummary): string {
   const timestamp = deployment?.lastUpdated || deployment?.createdAt;
-  return timestamp ? timeAgo(timestamp).replace(/^(\d+)(mo|[smhdwy])$/, '$1 $2') : '';
+  return timestamp ? timeAgo(timestamp) : '';
 }
 
 function inferredRepo(deployment: DeploymentOption, repos: RepoState[]): string {
@@ -62,6 +62,8 @@ interface Props {
   mappings: DeploymentMapping[];
   allContextMappings: DeploymentMapping[];
   deployments: DeploymentOption[];
+  lastReleaseDeployments: KubeDeploymentSummary[];
+  showLastRelease: boolean;
   repos: RepoState[];
   comparisons: Record<string, DeploymentTagComparison | null>;
   editing: boolean;
@@ -80,9 +82,10 @@ interface Props {
   onCopyVersion: (id: string, value: string) => void;
   onOpenGitDiff: (mapping: DeploymentMapping) => void;
   onAddMapping: () => void;
+  columnMenu: React.ReactNode;
 }
 
-export function DomainMappingTable({ domains, selectedDomainIds, mappings, allContextMappings, deployments, repos, comparisons, editing, syncing, releaseBranch, selectedMappingId, copiedValueId, draggedId, onSelect, onPatch, onMove, onDragStart, onDragEnd, onRemove, onContextMenu, onCopyVersion, onOpenGitDiff, onAddMapping }: Props) {
+export function DomainMappingTable({ domains, selectedDomainIds, mappings, allContextMappings, deployments, lastReleaseDeployments, showLastRelease, repos, comparisons, editing, syncing, releaseBranch, selectedMappingId, copiedValueId, draggedId, onSelect, onPatch, onMove, onDragStart, onDragEnd, onRemove, onContextMenu, onCopyVersion, onOpenGitDiff, onAddMapping, columnMenu }: Props) {
   const groups = useMemo<DomainGroup[]>(() => {
     const knownIds = new Set(domains.map((domain) => domain.id));
     const totalForDomain = (domainId: string) => allContextMappings.filter((mapping) => (mapping.domainIds ?? []).includes(domainId)).length;
@@ -102,10 +105,11 @@ export function DomainMappingTable({ domains, selectedDomainIds, mappings, allCo
   }, [domains, mappings, allContextMappings]);
   const visibleGroups = selectedDomainIds === null ? groups : groups.filter((group) => selectedDomainIds.includes(group.id));
 
-  const columnSpan = editing ? 9 : 6;
+  const columnSpan = (editing ? 9 : 6) + Number(showLastRelease) * 2;
   let serial = 0;
 
   return <div className="table-container mapping-table-wrap domain-mapping-table-wrap">
+    <div className="mapping-column-menu-float">{columnMenu}</div>
     <table className="domain-mapping-table">
       <thead><tr>
         <th className="mapping-column-number">#</th>
@@ -113,10 +117,12 @@ export function DomainMappingTable({ domains, selectedDomainIds, mappings, allCo
         <th className="mapping-column-deployment">DEPLOYMENT</th>
         <th className="mapping-column-repo">GIT REPOSITORY</th>
         {editing && <><th className="mapping-column-no-repo">NO REPO</th><th className="mapping-column-domains">DOMAINS</th></>}
-        <th className="mapping-column-image">DEPLOYED IMAGE</th>
+        <th className="mapping-column-image">CURRENT RELEASE</th>
+        {showLastRelease && <th className="mapping-column-last-release">LAST RELEASE</th>}
         <th className="mapping-column-latest">LATEST GIT TAG</th>
         <th className="mapping-column-changes">CHANGES</th>
         <th className="mapping-column-status">STATUS</th>
+        {showLastRelease && <th className="mapping-column-new" aria-label="New deployment indicator" />}
         {editing && <th className="mapping-column-actions" />}
       </tr></thead>
       <tbody>{visibleGroups.map((group) => group.mappings.length === 0
@@ -128,8 +134,14 @@ export function DomainMappingTable({ domains, selectedDomainIds, mappings, allCo
         : group.mappings.map((mapping, groupIndex) => {
           serial += 1;
           const deployment = deployments.find((item) => item.context === mapping.context && item.namespace === mapping.namespace && item.name === mapping.deployment);
+          const lastReleaseDeployment = lastReleaseDeployments.find((item) => item.namespace === 'default' && item.name === mapping.deployment);
           const repo = repos.find((item) => item.path === mapping.repoPath);
           const deployed = mapping.imageVersionOverride?.trim() || (deployment ? imageTag(deployment.image) : '');
+          const lastReleaseVersion = lastReleaseDeployment ? imageTag(lastReleaseDeployment.image) : '';
+          const lastReleaseAge = imageAge(lastReleaseDeployment);
+          const releaseVersionMatches = !!deployed && !!lastReleaseVersion && normalizeVersion(deployed) === normalizeVersion(lastReleaseVersion);
+          const currentReleaseClass = deployed ? 'mapping-version' : '';
+          const lastReleaseClass = lastReleaseVersion ? releaseVersionMatches ? 'mapping-version' : 'mapping-version-mismatch' : '';
           const comparison = comparisons[mapping.id];
           const latest = comparison?.latestTag || repo?.latestVersion || '';
           const comparisonTag = comparison?.latestTag;
@@ -150,6 +162,7 @@ export function DomainMappingTable({ domains, selectedDomainIds, mappings, allCo
           });
           const dimDomain = !editing && !syncing && !groupHasReleasedRepo && groupHasMissingReleaseRepo;
           const age = imageAge(deployment);
+          const isNewDeployment = showLastRelease && !!deployed && !lastReleaseDeployment;
           const status = mapping.noRepo ? <span className="mapping-status synced">✓ Mapped</span>
             : !mapping.repoPath ? <span className="mapping-status out-of-sync">Unmapped</span>
               : !comparison ? <span className="mapping-muted">—</span>
@@ -180,15 +193,17 @@ export function DomainMappingTable({ domains, selectedDomainIds, mappings, allCo
               <td className="mapping-column-no-repo"><input type="checkbox" aria-label={`No repository needed for ${mapping.deployment}`} checked={!!mapping.noRepo} onChange={(event) => onPatch(mapping.id, { noRepo: event.target.checked })} /></td>
               <td className="mapping-column-domains"><DomainChoices domains={domains} selectedIds={mapping.domainIds ?? []} onChange={(domainIds) => onPatch(mapping.id, { domainIds: domainIds.length ? domainIds : undefined })} /></td>
             </>}
-            <td className={`mapping-column-image ${deployed ? 'mapping-version' : ''}`}>{editing
-              ? <><input aria-label="Deployed image version override" placeholder={deployed || 'Image version override'} value={mapping.imageVersionOverride ?? ''} onChange={(event) => onPatch(mapping.id, { imageVersionOverride: event.target.value })} />{age && <small className="mapping-image-age">{age}</small>}</>
-              : <><span>{deployed ? <button type="button" className={`mapping-copy-value ${copiedValueId === `${mapping.id}:deployed` ? 'is-copied' : ''}`} title={copiedValueId === `${mapping.id}:deployed` ? 'Copied to clipboard' : 'Click to copy deployed image version'} aria-label={`Copy deployed image version ${deployed}`} onClick={(event) => { event.stopPropagation(); onSelect(mapping.id); onCopyVersion(`${mapping.id}:deployed`, deployed); }}>{deployed}</button> : '—'}</span>{age && <small className="mapping-image-age" title={deployment?.lastUpdated || deployment?.createdAt}>· {age}</small>}</>}</td>
+            <td className={`mapping-column-image ${currentReleaseClass}`}><div className="mapping-version-content">{editing
+              ? <><input aria-label="Deployed image version override" placeholder={deployed || 'Image version override'} value={mapping.imageVersionOverride ?? ''} onChange={(event) => onPatch(mapping.id, { imageVersionOverride: event.target.value })} />{age && <small className="mapping-image-age">({age})</small>}</>
+              : <><span className="mapping-version-value">{deployed ? <button type="button" className={`mapping-copy-value ${copiedValueId === `${mapping.id}:deployed` ? 'is-copied' : ''}`} title={copiedValueId === `${mapping.id}:deployed` ? 'Copied to clipboard' : 'Click to copy deployed image version'} aria-label={`Copy deployed image version ${deployed}`} onClick={(event) => { event.stopPropagation(); onSelect(mapping.id); onCopyVersion(`${mapping.id}:deployed`, deployed); }}>{deployed}</button> : '—'}</span>{age && <small className="mapping-image-age" title={deployment?.lastUpdated || deployment?.createdAt}>({age})</small>}</>}</div></td>
+            {showLastRelease && <td className={`mapping-column-last-release ${lastReleaseClass}`}><div className="mapping-version-content"><span className="mapping-version-value">{lastReleaseVersion || '—'}</span>{lastReleaseDeployment && lastReleaseAge && <small className="mapping-image-age">({lastReleaseAge})</small>}</div></td>}
             <td className="mapping-column-latest mapping-latest"><strong title={latest || undefined}>{latest ? <button type="button" className={`mapping-copy-value ${copiedValueId === `${mapping.id}:latest` ? 'is-copied' : ''}`} title={copiedValueId === `${mapping.id}:latest` ? 'Copied to clipboard' : 'Click to copy latest Git tag'} aria-label={`Copy latest Git tag ${latest}`} onClick={(event) => { event.stopPropagation(); onSelect(mapping.id); onCopyVersion(`${mapping.id}:latest`, latest); }}>{latest}</button> : '—'}</strong><small title={latestTagDate ? new Date(latestTagDate).toLocaleString() : undefined}>{latestTagDate ? `${new Date(latestTagDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${timeAgo(latestTagDate)} ago` : 'Tag time unavailable'}</small></td>
             <td className={`mapping-column-changes ${changes != null && changes > 0 ? 'mapping-changes-out-of-sync' : ''}`} title={changeTitle}>
               {mapping.noRepo ? '—' : !comparison ? <span className="mapping-muted">—</span> : comparison.error ? <span className="mapping-status out-of-sync" title={comparison.error}>Check failed</span>
                 : <button type="button" className="mapping-changes-link" aria-label={changes === 0 ? `Compare tags for ${repo?.name ?? mapping.deployment}` : `Open ${changes ?? 0} commits of difference for ${repo?.name ?? mapping.deployment}`} disabled={!comparisonTag && !latestTag} onClick={(event) => { event.stopPropagation(); onSelect(mapping.id); onOpenGitDiff(mapping); }}>{changes === 0 ? '0' : [comparison.baseAheadCount ? `${comparison.baseAheadCount} ahead` : '', comparison.baseBehindCount ? `${comparison.baseBehindCount} behind` : ''].filter(Boolean).join(' · ')}</button>}
             </td>
             <td className="mapping-column-status">{status}</td>
+            {showLastRelease && <td className="mapping-column-new">{isNewDeployment && <span className="mapping-new-badge">NEW</span>}</td>}
             {editing && <td className="mapping-column-actions"><div className="mapping-row-actions"><button type="button" className="mapping-drag" aria-label="Drag to reorder" title="Drag to reorder">⠿</button><button type="button" className="mapping-remove" aria-label="Remove mapping" onClick={(event) => { event.stopPropagation(); onRemove(mapping.id); }}>×</button></div></td>}
           </tr>;
         }))}</tbody>

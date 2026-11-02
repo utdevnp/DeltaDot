@@ -16,6 +16,18 @@ const MAPPING_FILTER_OPTIONS: CheckboxFilterOption[] = [
   { id: 'unknown', name: 'Unknown' },
   { id: 'error', name: 'Check failed' },
 ];
+const MAPPING_COLUMN_OPTIONS: CheckboxFilterOption[] = [
+  { id: 'domain', name: 'DOMAIN' },
+  { id: 'deployment', name: 'DEPLOYMENT' },
+  { id: 'repo', name: 'GIT REPOSITORY' },
+  { id: 'no-repo', name: 'NO REPO' },
+  { id: 'domains', name: 'DOMAINS' },
+  { id: 'image', name: 'CURRENT RELEASE' },
+  { id: 'last-release', name: 'LAST RELEASE' },
+  { id: 'latest', name: 'LATEST GIT TAG' },
+  { id: 'changes', name: 'CHANGES' },
+  { id: 'status', name: 'STATUS' },
+];
 
 function toggleFilterSelection(current: string[] | null, id: string): string[] | null {
   if (current === null) return [id];
@@ -45,6 +57,24 @@ function CheckboxFilterMenu({ label, allLabel, options, selectedIds, onSelectAll
     <div className="mapping-checkbox-filter-menu" role="group" aria-label={label}>
       <label><input type="checkbox" checked={selectedIds === null} onChange={onSelectAll} />{allLabel}</label>
       {options.map((option) => <label key={option.id}><input type="checkbox" checked={selectedIds?.includes(option.id) ?? false} onChange={() => onToggle(option.id)} />{option.name}</label>)}
+    </div>
+  </details>;
+}
+
+function MappingColumnMenu({ options, hiddenIds, onToggle, onShowAll }: { options: CheckboxFilterOption[]; hiddenIds: string[]; onToggle: (id: string) => void; onShowAll: () => void }) {
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const closeWhenClickedOutside = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) menuRef.current?.removeAttribute('open');
+    };
+    document.addEventListener('pointerdown', closeWhenClickedOutside);
+    return () => document.removeEventListener('pointerdown', closeWhenClickedOutside);
+  }, []);
+  return <details ref={menuRef} className="mapping-checkbox-filter mapping-column-filter">
+    <summary aria-label={`Choose visible columns (${options.length - options.filter((option) => hiddenIds.includes(option.id)).length} visible)`} title="Choose visible columns"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2" width="13" height="12" rx="1.5" /><path d="M6 2v12M10 2v12" /></svg></summary>
+    <div className="mapping-checkbox-filter-menu" role="group" aria-label="Visible mapping columns">
+      <label><input type="checkbox" checked={options.every((option) => !hiddenIds.includes(option.id))} onChange={onShowAll} />Show all columns</label>
+      {options.map((option) => <label key={option.id}><input type="checkbox" checked={!hiddenIds.includes(option.id)} onChange={() => onToggle(option.id)} />{option.name}</label>)}
     </div>
   </details>;
 }
@@ -127,9 +157,9 @@ function initialRepo(deployment: KubeDeploymentSummary, repos: RepoState[]): str
     ?? repos.find((repo) => repo.name.toLowerCase() === tail.toLowerCase())?.path ?? '';
 }
 
-function deploymentAge(deployment?: DeploymentOption): string {
+function deploymentAge(deployment?: KubeDeploymentSummary): string {
   const timestamp = deployment?.lastUpdated || deployment?.createdAt;
-  return timestamp ? timeAgo(timestamp).replace(/^(\d+)(mo|[smhdwy])$/, '$1 $2') : '';
+  return timestamp ? timeAgo(timestamp) : '';
 }
 
 export function MappingView({ repos, baseBranch, releaseBranch, provider, token, mappingTabs, legacyMappings, preferredContext, preferredTabId, preferredDisplay, editing, syncing, onEdit, onCancel, onPersist, onDisplayChange, onOpenPR }: Props) {
@@ -142,6 +172,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [lastReleaseError, setLastReleaseError] = useState('');
   const [draft, setDraft] = useState<DeploymentMapping[]>([]);
   const changeCounts = useMemo(() => Object.fromEntries(draft.map((mapping) => [mapping.id, mapping.comparison ?? null])), [draft]);
   const [loadedMappings, setLoadedMappings] = useState<DeploymentMapping[]>([]);
@@ -151,6 +182,13 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   const preloadAttempted = useRef(new Set<string>());
   const [search, setSearch] = useState('');
   const [mappingDisplay, setMappingDisplay] = useState<'all' | 'domain'>(preferredDisplay);
+  const [hiddenColumnsByTab, setHiddenColumnsByTab] = useState<Record<string, string[]>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('deltadot.mapping.columns-by-tab') ?? '{}');
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
+      return Object.fromEntries(Object.entries(saved).map(([tabId, ids]) => [tabId, Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string' && MAPPING_COLUMN_OPTIONS.some((option) => option.id === id)) : []]));
+    } catch { return {}; }
+  });
   const [domainFilterIds, setDomainFilterIds] = useState<string[] | null>(null);
   const [mappingFilterIds, setMappingFilterIds] = useState<string[] | null>(null);
   const [domainManagerOpen, setDomainManagerOpen] = useState(false);
@@ -172,7 +210,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   const [copiedValueId, setCopiedValueId] = useState('');
   const [detailDrawerWidth, setDetailDrawerWidth] = useState(630);
   const detailResize = useRef<{ pointerId: number; x: number; width: number } | null>(null);
-  const [tabEditor, setTabEditor] = useState<{ id: string; name: string; context: string } | null>(null);
+  const [tabEditor, setTabEditor] = useState<{ id: string; name: string; context: string; lastReleaseContext: string } | null>(null);
   const tabsRef = useRef(tabs);
   const reposRef = useRef(repos);
   const baseBranchRef = useRef(baseBranch);
@@ -215,7 +253,15 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   }, [detailMappingId, mappingForDetails?.repoPath, mappingForDetails?.noRepo, repoForDetails?.path, repoForDetails?.name, provider, token, baseBranch, releaseBranch]);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+  const hiddenMappingColumns = activeTab ? hiddenColumnsByTab[activeTab.id] ?? [] : [];
+  const availableMappingColumns = MAPPING_COLUMN_OPTIONS.filter((option) =>
+    (mappingDisplay === 'domain' || option.id !== 'domain')
+    && (option.id !== 'last-release' || !!activeTab?.lastReleaseContext)
+    && (editing || (option.id !== 'no-repo' && option.id !== 'domains')));
   const selectedContext = activeTab?.context ?? '';
+  const lastReleaseDeployments = activeTab?.lastReleaseDeploymentSnapshot ?? [];
+  const lastReleaseVersions = useMemo(() => new Map(lastReleaseDeployments.map((deployment) => [deployment.name, tagOf(deployment.image)])), [lastReleaseDeployments]);
+  const lastReleaseDeploymentNames = useMemo(() => new Set(lastReleaseDeployments.filter((deployment) => deployment.namespace === 'default').map((deployment) => deployment.name)), [lastReleaseDeployments]);
   const domainFilterOptions = [...(activeTab?.domains ?? []).map((domain) => ({ id: domain.id, name: domain.name })), { id: 'unassigned', name: 'Unassigned' }];
   const previousContextForLoad = useRef(selectedContext);
   const deploymentKey = (deployment: DeploymentOption) => `${deployment.context}/${deployment.namespace}/${deployment.name}`;
@@ -349,6 +395,39 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     }).catch((reason) => { if (live) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { live = false; };
   }, []);
+
+  useEffect(() => {
+    const target = activeTab;
+    const comparisonContext = target?.lastReleaseContext;
+    if (!target || !comparisonContext) { setLastReleaseError(''); return; }
+    if (!contexts.length) return;
+    if (comparisonContext === target.context) {
+      setLastReleaseError('Choose a Last release context different from the tab’s Kubernetes context.');
+      return;
+    }
+    if (!contexts.some((context) => context.name === comparisonContext)) {
+      setLastReleaseError(`Last release context “${comparisonContext}” is unavailable or disabled.`);
+      return;
+    }
+
+    let live = true;
+    const targetTabId = target.id;
+    setLastReleaseError('');
+    void window.api.k8sDeployments(comparisonContext, 'default').then((snapshot) => {
+      if (!live) return;
+      const latestTabs = tabsRef.current;
+      const latestTab = latestTabs.find((tab) => tab.id === targetTabId);
+      if (!latestTab || latestTab.lastReleaseContext !== comparisonContext) return;
+      const nextTabs = latestTabs.map((tab) => tab.id === targetTabId
+        ? { ...tab, lastReleaseDeploymentSnapshot: snapshot }
+        : tab);
+      setTabs(nextTabs);
+      onPersist(nextTabs, targetTabId);
+    }).catch((reason) => {
+      if (live) setLastReleaseError(`Could not load Last release context “${comparisonContext}”: ${reason instanceof Error ? reason.message : String(reason)}`);
+    });
+    return () => { live = false; };
+  }, [activeTabId, activeTab?.context, activeTab?.lastReleaseContext, contexts, refreshKey]);
 
   useEffect(() => {
     if (refreshKey === 0 || refreshKey === completedRefreshKey.current) return;
@@ -703,6 +782,8 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     persistTabs(tabs.map((tab) => tab.id === tabEditor.id ? {
       ...tab, name, context: tabEditor.context,
       ...(tab.context !== tabEditor.context ? { deploymentSnapshot: undefined } : {}),
+      lastReleaseContext: tabEditor.lastReleaseContext && tabEditor.lastReleaseContext !== tabEditor.context ? tabEditor.lastReleaseContext : undefined,
+      ...(tab.lastReleaseContext !== tabEditor.lastReleaseContext ? { lastReleaseDeploymentSnapshot: undefined } : {}),
     } : tab));
     setTabEditor(null);
     setSearch('');
@@ -712,6 +793,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     previousContextForLoad.current = activeTab.context;
     persistTabs(tabs.map((tab) => tab.id === activeTab.id ? {
       ...tab, context, ...(tab.context !== context ? { deploymentSnapshot: undefined } : {}),
+      ...(tab.lastReleaseContext === context ? { lastReleaseContext: undefined, lastReleaseDeploymentSnapshot: undefined } : {}),
     } : tab));
     setSearch('');
   };
@@ -743,7 +825,9 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     return () => window.removeEventListener('keydown', handler);
   }, [draft, selectedMappingId, editing, drawerDraft, tabEditor, detailMappingId, contextMenu]);
 
-  return <section className="mapping-view">
+  useEffect(() => { localStorage.setItem('deltadot.mapping.columns-by-tab', JSON.stringify(hiddenColumnsByTab)); }, [hiddenColumnsByTab]);
+
+  return <section className={`mapping-view ${hiddenMappingColumns.map((id) => `mapping-hide-column-${id}`).join(' ')}`}>
     <header className="repo-view-toolbar mapping-header">
       <div><strong>Deployment mapping</strong><span className="repo-view-scope">Default namespace · compare deployed image tags with latest Git tags</span></div>
       <div className="mapping-actions">
@@ -771,19 +855,26 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         </select>
         {mappingDisplay === 'domain' && <CheckboxFilterMenu label="Domains" allLabel="All domains" options={domainFilterOptions} selectedIds={domainFilterIds}
           onSelectAll={() => setDomainFilterIds(null)} onToggle={toggleDomainFilter} />}
-        <button type="button" onClick={createTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen}>＋ New</button><button type="button" onClick={duplicateTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Duplicate</button><button type="button" onClick={() => activeTab && setTabEditor({ id: activeTab.id, name: activeTab.name, context: activeTab.context })} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Edit tab</button><button type="button" className="mapping-tab-menu-button" aria-label="More mapping tab actions" title="More mapping tab actions" disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab} onClick={(event) => { if (!activeTab) return; const rect = event.currentTarget.getBoundingClientRect(); setTabMenu({ id: activeTab.id, x: Math.min(rect.right, window.innerWidth - 190), y: rect.bottom }); }}>⋯</button>
+        <button type="button" onClick={createTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen}>＋ New</button><button type="button" onClick={duplicateTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Duplicate</button><button type="button" onClick={() => activeTab && setTabEditor({ id: activeTab.id, name: activeTab.name, context: activeTab.context, lastReleaseContext: activeTab.lastReleaseContext ?? '' })} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Edit tab</button><button type="button" className="mapping-tab-menu-button" aria-label="More mapping tab actions" title="More mapping tab actions" disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab} onClick={(event) => { if (!activeTab) return; const rect = event.currentTarget.getBoundingClientRect(); setTabMenu({ id: activeTab.id, x: Math.min(rect.right, window.innerWidth - 190), y: rect.bottom }); }}>⋯</button>
       </div>
     </div>
     {loading && <div className="mapping-state">Loading deployments from kubeconfig…</div>}
     {!loading && error && <div className="mapping-state mapping-error">{error}</div>}
+    {!loading && lastReleaseError && <div className="mapping-state mapping-error" role="alert">{lastReleaseError}</div>}
     {!loading && !error && contexts.length === 0 && <div className="mapping-state">No Kubernetes contexts found. Configure a context in your kubeconfig to map deployments.</div>}
-    {mappingDisplay === 'all' ? <div className="table-container mapping-table-wrap"><div className="table-header mapping-table-head">
-        <div className="cell mapping-column-number">#</div><div className="cell mapping-column-deployment">DEPLOYMENT</div><div className="cell mapping-column-repo">GIT REPOSITORY</div>{editing && <><div className="cell mapping-column-no-repo">NO REPO</div><div className="cell mapping-column-domains">DOMAINS</div></>}<div className="cell mapping-column-image">DEPLOYED IMAGE</div><div className="cell mapping-column-latest">LATEST GIT TAG</div><div className="cell mapping-column-changes">CHANGES</div><div className="cell mapping-column-status">STATUS</div>{editing && <div className="cell mapping-column-actions" />}
+    {mappingDisplay === 'all' ? <div className="table-container mapping-table-wrap"><div className="mapping-column-menu-float"><MappingColumnMenu options={availableMappingColumns} hiddenIds={hiddenMappingColumns} onShowAll={() => activeTab && setHiddenColumnsByTab((current) => ({ ...current, [activeTab.id]: [] }))} onToggle={(id) => activeTab && setHiddenColumnsByTab((current) => { const ids = current[activeTab.id] ?? []; return { ...current, [activeTab.id]: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id] }; })} /></div><div className="table-header mapping-table-head">
+        <div className="cell mapping-column-number">#</div><div className="cell mapping-column-deployment">DEPLOYMENT</div><div className="cell mapping-column-repo">GIT REPOSITORY</div>{editing && <><div className="cell mapping-column-no-repo">NO REPO</div><div className="cell mapping-column-domains">DOMAINS</div></>}<div className="cell mapping-column-image">CURRENT RELEASE</div>{activeTab?.lastReleaseContext && <div className="cell mapping-column-last-release">LAST RELEASE</div>}<div className="cell mapping-column-latest">LATEST GIT TAG</div><div className="cell mapping-column-changes">CHANGES</div><div className="cell mapping-column-status">STATUS</div>{activeTab?.lastReleaseContext && <div className="cell mapping-column-new" aria-label="New deployment indicator" />}{editing && <div className="cell mapping-column-actions" />}
     </div>
       {visibleMappings.map((mapping, index) => {
         const deployment = deployments.find((item) => item.context === mapping.context && item.namespace === mapping.namespace && item.name === mapping.deployment);
         const repo = repos.find((item) => item.path === mapping.repoPath);
         const deployed = mapping.imageVersionOverride?.trim() || (deployment ? tagOf(deployment.image) : '');
+        const lastReleaseDeployment = lastReleaseDeployments.find((item) => item.namespace === 'default' && item.name === mapping.deployment);
+        const lastReleaseVersion = lastReleaseVersions.get(mapping.deployment) ?? '';
+        const lastReleaseAge = deploymentAge(lastReleaseDeployment);
+        const releaseVersionMatches = !!deployed && !!lastReleaseVersion && normalizedVersion(deployed) === normalizedVersion(lastReleaseVersion);
+        const currentReleaseClass = deployed ? 'mapping-version' : '';
+        const lastReleaseClass = lastReleaseVersion ? releaseVersionMatches ? 'mapping-version' : 'mapping-version-mismatch' : '';
         const latest = changeCounts[mapping.id]?.latestTag || repo?.latestVersion || '';
         const comparison = changeCounts[mapping.id];
         const changes = comparison && !comparison.error ? comparison.count : undefined;
@@ -795,6 +886,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         const imageOutOfSync = !!deployed && !!latest && normalizedVersion(deployed) !== normalizedVersion(latest);
         const dim = !editing && !!repo?.missingRelease && !syncing;
         const age = deploymentAge(deployment);
+        const isNewDeployment = !!activeTab?.lastReleaseContext && !!deployed && !lastReleaseDeploymentNames.has(mapping.deployment);
         const deploymentTimestamp = deployment?.lastUpdated || deployment?.createdAt;
         const deploymentHours = deploymentTimestamp ? Math.max(0, (Date.now() - new Date(deploymentTimestamp).getTime()) / 3_600_000) : null;
         return <div key={mapping.id} className={`table-row mapping-row ${selectedMappingId === mapping.id ? 'mapping-row-selected' : ''} ${draggedId === mapping.id ? 'dragging' : ''}`} style={dim ? { opacity: 0.5 } : undefined} title={dim ? `Repository has no ${releaseBranch} branch` : undefined} draggable={editing} onClick={() => setSelectedMappingId(mapping.id)} onDragStart={() => setDraggedId(mapping.id)} onDragOver={(event) => { if (editing) event.preventDefault(); }} onDrop={() => move(mapping.id)} onDragEnd={() => setDraggedId('')} onContextMenu={(event) => { event.preventDefault(); setSelectedMappingId(mapping.id); setContextMenu({ x: Math.min(event.clientX, window.innerWidth - 180), y: Math.min(event.clientY, window.innerHeight - 50), id: mapping.id }); }}>
@@ -803,12 +895,14 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
           <div className="cell mapping-column-repo">{editing ? mapping.noRepo ? <span className="mapping-muted">—</span> : <SearchableSelect label="Git repository" value={mapping.repoPath} placeholder="Search repository…" options={repos.map((item) => ({ value: item.path, label: item.name }))} onChange={(value) => patch(mapping.id, { repoPath: value, noRepo: false })} /> : mapping.noRepo ? <span className="mapping-no-repo-note">No repo for this</span> : repo?.name ?? (mapping.repoPath ? mapping.repoPath.split(/[\\/]/).pop() : null) ?? <span className="mapping-muted">Not mapped</span>}</div>
           {editing && <div className="cell mapping-column-no-repo"><input type="checkbox" aria-label={`No repository needed for ${mapping.deployment}`} checked={!!mapping.noRepo} onChange={(event) => patch(mapping.id, { noRepo: event.target.checked })} /></div>}
           {editing && <div className="cell mapping-column-domains"><DomainChoices domains={activeTab?.domains ?? []} selectedIds={mapping.domainIds ?? []} onChange={(domainIds) => patch(mapping.id, { domainIds: domainIds.length ? domainIds : undefined })} /></div>}
-          <div className={`cell mapping-column-image ${deployed ? 'mapping-version' : ''}`}>{editing ? <><input aria-label="Deployed image version override" placeholder={deployed || 'Image version override'} value={mapping.imageVersionOverride ?? ''} onChange={(event) => patch(mapping.id, { imageVersionOverride: event.target.value })} />{age && <small className="mapping-image-age">{age}</small>}</> : <><span>{deployed ? <button type="button" className={`mapping-copy-value ${copiedValueId === `${mapping.id}:deployed` ? 'is-copied' : ''}`} title={copiedValueId === `${mapping.id}:deployed` ? 'Copied to clipboard' : 'Click to copy deployed image version'} aria-label={`Copy deployed image version ${deployed}`} onClick={(event) => { event.stopPropagation(); setSelectedMappingId(mapping.id); void copyVersion(`${mapping.id}:deployed`, deployed); }}>{deployed}</button> : '—'}</span>{age && <small className="mapping-image-age" title={deployment?.lastUpdated || deployment?.createdAt}>· {age}</small>}</>}</div>
+          <div className={`cell mapping-column-image ${currentReleaseClass}`}><div className="mapping-version-content">{editing ? <input aria-label="Deployed image version override" placeholder={deployed || 'Image version override'} value={mapping.imageVersionOverride ?? ''} onChange={(event) => patch(mapping.id, { imageVersionOverride: event.target.value })} /> : <span className="mapping-version-value">{deployed ? <button type="button" className={`mapping-copy-value ${copiedValueId === `${mapping.id}:deployed` ? 'is-copied' : ''}`} title={copiedValueId === `${mapping.id}:deployed` ? 'Copied to clipboard' : 'Click to copy deployed image version'} aria-label={`Copy deployed image version ${deployed}`} onClick={(event) => { event.stopPropagation(); setSelectedMappingId(mapping.id); void copyVersion(`${mapping.id}:deployed`, deployed); }}>{deployed}</button> : '—'}</span>}{age && <small className="mapping-image-age" title={deployment?.lastUpdated || deployment?.createdAt}>({age})</small>}</div></div>
+          {activeTab?.lastReleaseContext && <div className={`cell mapping-column-last-release ${lastReleaseClass}`}><div className="mapping-version-content"><span className="mapping-version-value">{lastReleaseVersion || '—'}</span>{lastReleaseDeployment && lastReleaseAge && <small className="mapping-image-age">({lastReleaseAge})</small>}</div></div>}
           <div className="cell mapping-column-latest mapping-latest"><strong title={latest || undefined}>{latest ? <button type="button" className={`mapping-copy-value ${copiedValueId === `${mapping.id}:latest` ? 'is-copied' : ''}`} title={copiedValueId === `${mapping.id}:latest` ? 'Copied to clipboard' : 'Click to copy latest Git tag'} aria-label={`Copy latest Git tag ${latest}`} onClick={(event) => { event.stopPropagation(); setSelectedMappingId(mapping.id); void copyVersion(`${mapping.id}:latest`, latest); }}>{latest}</button> : '—'}</strong><small title={latestTagDate ? new Date(latestTagDate).toLocaleString() : undefined}>{latestTagDate ? `${new Date(latestTagDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${timeAgo(latestTagDate)} ago` : 'Tag time unavailable'}</small></div>
           <div className={`cell mapping-column-changes ${changes != null && changes > 0 ? 'mapping-changes-out-of-sync' : ''}`} title={comparison?.error || (comparisonTag ? baseChanged ? `Compare ${comparisonTag} → ${comparison.checkedBranch} (press O)` : imageOutOfSync ? `Compare ${deployed} → ${latestTag} (press O)` : previousTag ? `Compare ${previousTag} → ${latestTag} (press O)` : `Compare ${latestTag} → ${comparison.checkedBranch} (press O)` : 'Press Refresh to calculate changes')}>
             {mapping.noRepo ? '—' : !comparison ? <span className="mapping-muted">—</span> : comparison.error ? <span className="mapping-status out-of-sync" title={comparison.error}>Check failed</span> : <button type="button" className="mapping-changes-link" aria-label={changes === 0 ? `Compare tags for ${repo?.name ?? mapping.deployment}` : `Open ${changes ?? 0} commits of difference for ${repo?.name ?? mapping.deployment}`} disabled={!comparisonTag && !latestTag} onClick={(event) => { event.stopPropagation(); setSelectedMappingId(mapping.id); void openGitDiff(mapping); }}>{changes === 0 ? '0' : [comparison.baseAheadCount ? `${comparison.baseAheadCount} ahead` : '', comparison.baseBehindCount ? `${comparison.baseBehindCount} behind` : ''].filter(Boolean).join(' · ')}</button>}
           </div>
           <div className="cell mapping-column-status">{mapping.noRepo ? <span className="mapping-status synced">✓ Mapped</span> : !mapping.repoPath ? <span className="mapping-status out-of-sync">Unmapped</span> : !comparison ? <span className="mapping-muted">—</span> : comparison.status === 'error' ? <span className="mapping-status out-of-sync" title={comparison.error ?? undefined}>Check failed</span> : comparison.status === 'changed' ? <span className="mapping-status out-of-sync" title="The base branch and latest Git tag differ">Changed</span> : comparison.status === 'not-synced' ? <span className="mapping-status out-of-sync">Not synced</span> : comparison.status === 'synced' ? <span className="mapping-status synced">✓ Synced</span> : <span className="mapping-status" title="A deployed image tag or latest Git tag is unavailable">Unknown</span>}</div>
+          {activeTab?.lastReleaseContext && <div className="cell mapping-column-new">{isNewDeployment && <span className="mapping-new-badge">NEW</span>}</div>}
           {editing && <div className="cell mapping-column-actions mapping-row-actions"><button type="button" className="mapping-drag" aria-label="Drag to reorder" title="Drag to reorder">⠿</button><button type="button" className="mapping-remove" aria-label="Remove mapping" onClick={() => setDraft((previous) => previous.filter((item) => item.id !== mapping.id))}>×</button></div>}
         </div>;
       })}
@@ -819,6 +913,8 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
       mappings={visibleMappings}
       allContextMappings={contextMappings}
       deployments={deployments}
+      lastReleaseDeployments={lastReleaseDeployments}
+      showLastRelease={!!activeTab?.lastReleaseContext}
       repos={repos}
       comparisons={changeCounts}
       editing={editing}
@@ -837,6 +933,9 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
       onCopyVersion={(id, value) => void copyVersion(id, value)}
       onOpenGitDiff={(mapping) => void openGitDiff(mapping)}
       onAddMapping={addMapping}
+      columnMenu={<MappingColumnMenu options={availableMappingColumns} hiddenIds={hiddenMappingColumns}
+        onShowAll={() => activeTab && setHiddenColumnsByTab((current) => ({ ...current, [activeTab.id]: [] }))}
+        onToggle={(id) => activeTab && setHiddenColumnsByTab((current) => { const ids = current[activeTab.id] ?? []; return { ...current, [activeTab.id]: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id] }; })} />}
     />}
     {editing && <button className="mapping-add" type="button" onClick={addMapping}>＋ Add deployment mapping</button>}
     {tabMenu && <><button type="button" className="repo-context-backdrop mapping-menu-backdrop" aria-label="Close tab menu" onClick={() => setTabMenu(null)} /><div className="repo-context-menu mapping-row-menu" style={{ left: tabMenu.x, top: tabMenu.y }}><div className="repo-context-heading">{tabs.find((tab) => tab.id === tabMenu.id)?.name ?? 'Mapping tab'}</div><button type="button" onClick={() => { setTabMenu(null); setDomainError(''); setDomainManagerOpen(true); }}><span>Manage domains…</span></button><button type="button" onClick={() => { const target = tabs.find((tab) => tab.id === tabMenu.id); setTabMenu(null); if (target) setDeleteTabTarget(target); }}><span>Delete tab…</span></button></div></>}
@@ -870,7 +969,8 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
       <header className="dashboard-drawer-header"><div><span className="about-drawer-eyebrow">Mapping tab</span><h2>Edit tab</h2></div><button type="button" className="dashboard-drawer-close" aria-label="Close tab editor" onClick={() => setTabEditor(null)}>×</button></header>
       <div className="dashboard-drawer-body mapping-edit-body">
         <label className="mapping-edit-field"><span>Tab name</span><input autoFocus value={tabEditor.name} placeholder="Mapping name" onChange={(event) => setTabEditor((current) => current ? { ...current, name: event.target.value } : current)} /></label>
-        <label className="mapping-edit-field"><span>Kubernetes context</span><select value={tabEditor.context} onChange={(event) => setTabEditor((current) => current ? { ...current, context: event.target.value } : current)}>{contexts.map((context) => <option key={context.name} value={context.name}>{context.name}</option>)}</select></label>
+        <label className="mapping-edit-field"><span>Kubernetes context</span><select value={tabEditor.context} onChange={(event) => setTabEditor((current) => current ? { ...current, context: event.target.value, lastReleaseContext: current.lastReleaseContext === event.target.value ? '' : current.lastReleaseContext } : current)}>{contexts.map((context) => <option key={context.name} value={context.name}>{context.name}</option>)}</select></label>
+        <label className="mapping-edit-field"><span>Last release context</span><select value={tabEditor.lastReleaseContext} onChange={(event) => setTabEditor((current) => current ? { ...current, lastReleaseContext: event.target.value } : current)}><option value="">None</option>{contexts.filter((context) => context.name !== tabEditor.context || context.name === tabEditor.lastReleaseContext).map((context) => <option key={context.name} value={context.name}>{context.name}</option>)}</select></label>
         <div className="mapping-edit-context"><span>Context details</span><strong>Cluster · {contexts.find((context) => context.name === tabEditor.context)?.cluster || 'Unavailable'}</strong><strong>Namespace · default</strong><strong>{contexts.find((context) => context.name === tabEditor.context)?.current ? 'Current kubeconfig context' : 'Configured kubeconfig context'}</strong></div>
         <p className="mapping-edit-help">This tab loads and saves deployment mappings from the selected context’s default namespace.</p>
       </div>
