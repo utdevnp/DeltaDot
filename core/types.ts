@@ -59,6 +59,7 @@ export interface DeploymentMapping {
   baseBranch?: string;
   noRepo?: boolean;
   domainIds?: string[];
+  reportComment?: string;
   comparison?: DeploymentTagComparison;
 }
 

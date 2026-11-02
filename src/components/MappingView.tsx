@@ -2,6 +2,7 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { DeploymentMapping, DeploymentMappingDomain, DeploymentMappingTab, DeploymentTagComparison, KubeContext, KubeDeploymentSummary, PR, Provider, RepoState } from '../../core/types.js';
 import { timeAgo } from '../../core/utils.js';
 import { DomainMappingTable } from './DomainMappingTable.js';
+import { MappingReport, type MappingReportSnapshot } from './MappingReport.js';
 
 type DeploymentOption = KubeDeploymentSummary & { context: string };
 type SelectOption = { value: string; label: string };
@@ -28,6 +29,8 @@ const MAPPING_COLUMN_OPTIONS: CheckboxFilterOption[] = [
   { id: 'changes', name: 'CHANGES' },
   { id: 'status', name: 'STATUS' },
 ];
+const MAPPING_TAB_MENU_WIDTH = 246;
+const MAPPING_TAB_MENU_HEIGHT = 132;
 
 function toggleFilterSelection(current: string[] | null, id: string): string[] | null {
   if (current === null) return [id];
@@ -178,6 +181,9 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   const [loadedMappings, setLoadedMappings] = useState<DeploymentMapping[]>([]);
   const [draggedId, setDraggedId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [reportSnapshot, setReportSnapshot] = useState<MappingReportSnapshot | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const completedRefreshKey = useRef(0);
   const preloadAttempted = useRef(new Set<string>());
   const [search, setSearch] = useState('');
@@ -506,6 +512,84 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   };
 
   const contextMappings = draft.filter((mapping) => mapping.context === selectedContext && mapping.namespace === 'default');
+  const saveReportComment = (mappingId: string, comment: string) => {
+    if (!reportSnapshot) return;
+    const trimmedComment = comment.trim();
+    const updateMapping = (mapping: DeploymentMapping) => mapping.id === mappingId
+      ? { ...mapping, reportComment: trimmedComment || undefined }
+      : mapping;
+    const nextTabs = tabs.map((tab) => tab.id === reportSnapshot.tabId
+      ? { ...tab, mappings: tab.mappings.map(updateMapping) }
+      : tab);
+    setTabs(nextTabs);
+    if (reportSnapshot.tabId === activeTabId) {
+      setDraft((current) => current.map(updateMapping));
+      setLoadedMappings((current) => current.map(updateMapping));
+    }
+    onPersist(nextTabs, activeTabId);
+    setReportSnapshot((current) => current ? {
+      ...current,
+      rows: current.rows.map((row) => row.mapping.id === mappingId ? { ...row, mapping: updateMapping(row.mapping) } : row),
+    } : current);
+  };
+  const generateReport = async () => {
+    if (!activeTab || reportLoading) return;
+    const initialRows = contextMappings.map((mapping) => ({
+      mapping: { ...mapping },
+      deployment: deployments.find((item) => item.context === mapping.context && item.namespace === mapping.namespace && item.name === mapping.deployment),
+      lastReleaseDeployment: lastReleaseDeployments.find((item) => item.namespace === 'default' && item.name === mapping.deployment),
+      repo: repos.find((item) => item.path === mapping.repoPath),
+      comparison: mapping.comparison,
+      ...(mapping.repoPath && !mapping.noRepo ? { prLoading: true } : { prs: [] }),
+    }));
+    const snapshot: MappingReportSnapshot = {
+      tabId: activeTab.id,
+      title: activeTab.name,
+      domains: activeTab.domains ?? [],
+      hasLastReleaseContext: !!activeTab.lastReleaseContext,
+      rows: initialRows,
+    };
+    setReportSnapshot(snapshot);
+    setReportOpen(true);
+    setReportLoading(true);
+
+    try {
+      const repoPaths = [...new Set(initialRows.filter((row) => row.mapping.repoPath && !row.mapping.noRepo).map((row) => row.mapping.repoPath))];
+      const prResults = new Map<string, { prs: PR[]; hasMore: boolean; error?: string }>();
+      const normalizeBranch = (branch: string) => branch.trim().replace(/^refs\/heads\//, '').toLowerCase();
+
+      await Promise.all(repoPaths.map(async (repoPath) => {
+        try {
+          if (!token.trim()) throw new Error('API token is not configured.');
+          const repo = repos.find((item) => item.path === repoPath);
+          if (!repo) throw new Error('Repository is not available in this workspace.');
+          const remote = await window.api.getRemoteOwnerRepo(repoPath);
+          if (!remote) throw new Error('Could not read the repository remote.');
+          const page = await window.api.fetchPRs(remote.owner, remote.repo, provider, token, repo.name, 'mapping-all', 1, 100, releaseBranch, baseBranch);
+          const source = normalizeBranch(releaseBranch);
+          const target = normalizeBranch(baseBranch);
+          prResults.set(repoPath, {
+            prs: page.prs.filter((pr) => normalizeBranch(pr.sourceBranch) === source && normalizeBranch(pr.targetBranch) === target),
+            hasMore: page.hasMore,
+          });
+        } catch (reason) {
+          prResults.set(repoPath, { prs: [], hasMore: false, error: reason instanceof Error ? reason.message : String(reason) });
+        }
+      }));
+
+      setReportSnapshot((current) => current ? {
+        ...current,
+        rows: current.rows.map((row) => {
+          const repoPath = row.mapping.repoPath;
+          if (!repoPath || row.mapping.noRepo) return { ...row, prLoading: false, prs: [] };
+          const result = prResults.get(repoPath);
+          return { ...row, prLoading: false, prs: result?.prs ?? [], prHasMore: result?.hasMore ?? false, prError: result?.error };
+        }),
+      } : current);
+    } finally {
+      setReportLoading(false);
+    }
+  };
   const releasedCount = contextMappings.filter((mapping) => {
     const repo = repos.find((item) => item.path === mapping.repoPath);
     return !!mapping.repoPath && !!repo && !repo.missingRelease;
@@ -731,6 +815,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     if (activeTab) void preloadEmptyTab(activeTab.id);
   }, [activeTabId, selectedContext]);
   const activateTab = (id: string) => {
+    setReportOpen(false);
     previousContextForLoad.current = tabs.find((tab) => tab.id === id)?.context ?? '';
     setActiveTabId(id);
     setDomainFilterIds(null);
@@ -830,7 +915,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   return <section className={`mapping-view ${hiddenMappingColumns.map((id) => `mapping-hide-column-${id}`).join(' ')}`}>
     <header className="repo-view-toolbar mapping-header">
       <div><strong>Deployment mapping</strong><span className="repo-view-scope">Default namespace · compare deployed image tags with latest Git tags</span></div>
-      <div className="mapping-actions">
+      {!reportOpen && <div className="mapping-actions">
         <input className="repo-search-input mapping-search" type="search" aria-label="Search mappings" placeholder="Search deployment or repository…" value={search} onChange={(event) => setSearch(event.target.value)} />
         <div className="mapping-release-filters" role="group" aria-label="Release branch filter">
           <button type="button" className={`repo-status-chip repo-status-chip-all ${releaseFilter === 'all' ? 'is-active' : ''}`} data-tooltip="All mappings" aria-pressed={releaseFilter === 'all'} onClick={() => setReleaseFilter('all')}>All</button>
@@ -841,13 +926,17 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         <span className="mapping-count">{visibleMappings.length}</span>
         <button className="mapping-button secondary" disabled={loading || syncing || editing || !selectedContext} onClick={refreshMappings}>{loading || syncing ? 'Refreshing…' : '↻ Refresh (R)'}</button>
         {editing ? <><button className="mapping-button secondary" onClick={() => { setDraft(loadedMappings); onCancel(); }}>Cancel</button><button className="mapping-button primary" onClick={() => { saveActiveMappings(draft); onCancel(); }}>Save changes</button></> : <button className="mapping-button primary" onClick={onEdit}>Edit mappings</button>}
-      </div>
+      </div>}
     </header>
     <div className="mapping-tabbar">
-      <div className="mapping-tabs" role="tablist" aria-label="Mapping tabs">{tabs.map((tab) => <div key={tab.id} className={`mapping-tab-shell ${tab.id === activeTab?.id ? 'active' : ''}`}>
-        <button type="button" role="tab" aria-selected={tab.id === activeTab?.id} className="mapping-tab" disabled={editing || !!drawerDraft || !!tabEditor} onClick={() => activateTab(tab.id)}><span>{tab.name}</span></button>
-      </div>)}</div>
+      <div className="mapping-tabs" role="tablist" aria-label="Mapping tabs">{tabs.map((tab) => <div key={tab.id} className={`mapping-tab-shell ${!reportOpen && tab.id === activeTab?.id ? 'active' : ''}`}>
+        <button type="button" role="tab" aria-selected={!reportOpen && tab.id === activeTab?.id} className="mapping-tab" disabled={editing || !!drawerDraft || !!tabEditor} onClick={() => activateTab(tab.id)}><span>{tab.name}</span></button>
+      </div>)}{reportSnapshot && <div className={`mapping-tab-shell mapping-report-tab ${reportOpen ? 'active' : ''}`}>
+        <button type="button" role="tab" aria-selected={reportOpen} className="mapping-tab" onClick={() => setReportOpen(true)}><span>Report · {reportSnapshot.title}</span></button>
+        <button type="button" className="mapping-report-tab-close" aria-label="Close report tab" title="Close report tab" onClick={() => { setReportSnapshot(null); setReportOpen(false); }}>×</button>
+      </div>}</div>
       <div className="mapping-tab-actions">
+        {!reportOpen && <>
         <CheckboxFilterMenu label="Status" allLabel="All statuses" options={MAPPING_FILTER_OPTIONS} selectedIds={mappingFilterIds}
           onSelectAll={() => setMappingFilterIds(null)} onToggle={(id) => setMappingFilterIds((current) => toggleFilterSelection(current, id))} />
         <select className="mapping-filter-select" aria-label="Filter by deployment age" title="Filter by Kubernetes deployment update time" value={deploymentAgeFilter} onChange={(event) => setDeploymentAgeFilter(event.target.value)}>
@@ -855,9 +944,11 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         </select>
         {mappingDisplay === 'domain' && <CheckboxFilterMenu label="Domains" allLabel="All domains" options={domainFilterOptions} selectedIds={domainFilterIds}
           onSelectAll={() => setDomainFilterIds(null)} onToggle={toggleDomainFilter} />}
-        <button type="button" onClick={createTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen}>＋ New</button><button type="button" onClick={duplicateTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Duplicate</button><button type="button" onClick={() => activeTab && setTabEditor({ id: activeTab.id, name: activeTab.name, context: activeTab.context, lastReleaseContext: activeTab.lastReleaseContext ?? '' })} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Edit tab</button><button type="button" className="mapping-tab-menu-button" aria-label="More mapping tab actions" title="More mapping tab actions" disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab} onClick={(event) => { if (!activeTab) return; const rect = event.currentTarget.getBoundingClientRect(); setTabMenu({ id: activeTab.id, x: Math.min(rect.right, window.innerWidth - 190), y: rect.bottom }); }}>⋯</button>
+        <button type="button" onClick={createTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen}>＋ New</button><button type="button" onClick={duplicateTab} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Duplicate</button><button type="button" onClick={() => activeTab && setTabEditor({ id: activeTab.id, name: activeTab.name, context: activeTab.context, lastReleaseContext: activeTab.lastReleaseContext ?? '' })} disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab}>Edit tab</button><button type="button" className="mapping-tab-menu-button" aria-label="More mapping tab actions" title="More mapping tab actions" disabled={editing || !!drawerDraft || !!tabEditor || domainManagerOpen || !activeTab} onClick={(event) => { if (!activeTab) return; const rect = event.currentTarget.getBoundingClientRect(); const menuWidth = Math.min(MAPPING_TAB_MENU_WIDTH, Math.max(0, window.innerWidth - 16)); const left = Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)); const top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - MAPPING_TAB_MENU_HEIGHT - 8)); setTabMenu({ id: activeTab.id, x: left, y: top }); }}>⋯</button>
+        </>}
       </div>
     </div>
+    {reportOpen && reportSnapshot ? <MappingReport {...reportSnapshot} onSaveComment={saveReportComment} /> : <>
     {loading && <div className="mapping-state">Loading deployments from kubeconfig…</div>}
     {!loading && error && <div className="mapping-state mapping-error">{error}</div>}
     {!loading && lastReleaseError && <div className="mapping-state mapping-error" role="alert">{lastReleaseError}</div>}
@@ -938,7 +1029,8 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         onToggle={(id) => activeTab && setHiddenColumnsByTab((current) => { const ids = current[activeTab.id] ?? []; return { ...current, [activeTab.id]: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id] }; })} />}
     />}
     {editing && <button className="mapping-add" type="button" onClick={addMapping}>＋ Add deployment mapping</button>}
-    {tabMenu && <><button type="button" className="repo-context-backdrop mapping-menu-backdrop" aria-label="Close tab menu" onClick={() => setTabMenu(null)} /><div className="repo-context-menu mapping-row-menu" style={{ left: tabMenu.x, top: tabMenu.y }}><div className="repo-context-heading">{tabs.find((tab) => tab.id === tabMenu.id)?.name ?? 'Mapping tab'}</div><button type="button" onClick={() => { setTabMenu(null); setDomainError(''); setDomainManagerOpen(true); }}><span>Manage domains…</span></button><button type="button" onClick={() => { const target = tabs.find((tab) => tab.id === tabMenu.id); setTabMenu(null); if (target) setDeleteTabTarget(target); }}><span>Delete tab…</span></button></div></>}
+    </>}
+    {tabMenu && <><button type="button" className="repo-context-backdrop mapping-menu-backdrop" aria-label="Close tab menu" onClick={() => setTabMenu(null)} /><div className="repo-context-menu mapping-row-menu mapping-tab-menu" style={{ left: tabMenu.x, top: tabMenu.y }}><div className="repo-context-heading">{tabs.find((tab) => tab.id === tabMenu.id)?.name ?? 'Mapping tab'}</div><button type="button" disabled={loading || editing || reportLoading || !selectedContext} onClick={() => { setTabMenu(null); void generateReport(); }}><span>{reportLoading ? 'Generating report…' : 'Generate report'}</span></button><button type="button" onClick={() => { setTabMenu(null); setDomainError(''); setDomainManagerOpen(true); }}><span>Manage domains…</span></button><button type="button" onClick={() => { const target = tabs.find((tab) => tab.id === tabMenu.id); setTabMenu(null); if (target) setDeleteTabTarget(target); }}><span>Delete tab…</span></button></div></>}
     {contextMenu && <><button type="button" className="repo-context-backdrop mapping-menu-backdrop" aria-label="Close row menu" onClick={() => setContextMenu(null)} /><div className="repo-context-menu mapping-row-menu" style={{ left: contextMenu.x, top: contextMenu.y }}><div className="repo-context-heading">Mapping row</div><button type="button" onClick={() => { const mapping = draft.find((item) => item.id === contextMenu.id); if (mapping) openDetailDrawer(mapping); }}><span>View details</span><kbd>V</kbd></button><button type="button" onClick={() => { const mapping = draft.find((item) => item.id === contextMenu.id); if (mapping) openEditDrawer(mapping); }}><span>Edit mapping</span></button></div></>}
     {deleteTabTarget && <><button type="button" className="dashboard-drawer-backdrop" aria-label="Cancel deleting mapping tab" onClick={() => setDeleteTabTarget(null)} /><aside className="dashboard-detail-drawer mapping-edit-drawer" role="dialog" aria-modal="true" aria-label="Confirm mapping tab deletion"><header className="dashboard-drawer-header"><div><span className="about-drawer-eyebrow">Delete mapping tab</span><h2>Delete “{deleteTabTarget.name}”?</h2></div><button type="button" className="dashboard-drawer-close" aria-label="Cancel" onClick={() => setDeleteTabTarget(null)}>×</button></header><div className="dashboard-drawer-body mapping-edit-body"><p>This removes the tab and its saved mappings and refreshed deployment data.</p></div><footer className="dashboard-drawer-footer"><button type="button" className="mapping-button secondary" onClick={() => setDeleteTabTarget(null)}>Cancel</button><button type="button" className="mapping-button danger" onClick={() => { closeTab(deleteTabTarget.id); setDeleteTabTarget(null); }}>Delete tab</button></footer></aside></>}
     {drawerDraft && <><button type="button" className="dashboard-drawer-backdrop" aria-label="Close mapping editor" onClick={closeEditDrawer} /><aside className="dashboard-detail-drawer mapping-edit-drawer" role="dialog" aria-modal="true" aria-label="Edit deployment mapping">
