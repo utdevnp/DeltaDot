@@ -20,8 +20,9 @@ export interface DashboardProps {
   onOpenRepositories: () => void;
   onOpenPRs: (filter?: 'all' | 'review' | 'conflicts' | 'approved') => void;
   onOpenKubernetes: () => void;
+  onOpenJira: () => void;
+  onCreatePR: () => void;
   onOpenSettings: () => void;
-  onOpenWorkspace: () => void;
   onOpenCommitList: (repo: RepoState, commitHash?: string) => void;
   onOpenPRDetail: (pr: PR) => void;
   onOpenKubeDetail: (entry: KubeActivityEntry) => void;

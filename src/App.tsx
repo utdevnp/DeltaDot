@@ -436,6 +436,8 @@ export function App() {
 
   useEffect(() => {
     const root = document.documentElement;
+    root.dataset.theme = 'deltadot';
+    root.style.colorScheme = effectiveTheme;
     if (effectiveTheme === 'light') {
       root.classList.add('theme-light');
     } else {
@@ -2855,8 +2857,26 @@ export function App() {
             onOpenRepositories={() => setView('list')}
             onOpenPRs={(statusFilter) => { setPRStatusFilter(statusFilter ?? 'all'); void handleChangeView('prs'); }}
             onOpenKubernetes={() => handleChangeView('k8s')}
+            onOpenJira={() => cfg.jiraUrl?.trim() ? window.api.openUrl(cfg.jiraUrl.trim()) : setView('config')}
+            onCreatePR={async () => {
+              const targetRepo = repos.find((repo) => repo.status !== 'error') ?? repos[0];
+              if (!targetRepo) {
+                showStatusRef.current('Add a repository before creating a pull request.', true);
+                return;
+              }
+              try {
+                const remoteUrl = await window.api.getRemoteUrl(targetRepo.path);
+                const compareUrl = await window.api.getCompareUrl(remoteUrl, cfg.base, cfg.release);
+                if (!compareUrl) {
+                  showStatusRef.current(`Could not build a pull request link for ${targetRepo.name}.`, true);
+                  return;
+                }
+                await window.api.openUrl(compareUrl);
+              } catch (error) {
+                showStatusRef.current(error instanceof Error ? error.message : String(error), true);
+              }
+            }}
             onOpenSettings={() => setView('config')}
-            onOpenWorkspace={() => selectWorkspace()}
             onOpenCommitList={(repo, commitHash) => {
               const allCommits = [...repo.diffCommits, ...repo.latestCommits.map((commit) => ({ hash: commit.hash, message: commit.subject }))];
               const selectedIndex = commitHash ? allCommits.findIndex((commit) => commit.hash === commitHash) : 0;
@@ -3385,7 +3405,16 @@ export function App() {
     <div className="app-container">
       {workspacePath ? (
         <>
-          <TopBar
+          <AppNav
+            currentView={view}
+            onHome={() => setView('home')}
+            onNavigate={(nextView) => nextView === 'review'
+              ? (reviewContext.prNumber ? setView('review') : setView('prs'))
+              : handleChangeView(nextView)}
+            onOpenSettings={() => setView('config')}
+          />
+          <div className="app-workspace-shell">
+            <TopBar
             workspacePath={workspacePath}
             base={cfg.base}
             release={cfg.release}
@@ -3397,6 +3426,7 @@ export function App() {
             activeWorkspaceId={activeWorkspaceId}
             onSwitchWorkspace={switchWorkspace}
             onAddWorkspace={selectWorkspace}
+            onSyncAll={() => syncAllRef.current()}
             onEditWorkspace={() => {
               const activeWorkspace = workspaces.find((ws) => ws.id === activeWorkspaceId);
               if (activeWorkspace) setEditWorkspace(activeWorkspace);
@@ -3406,19 +3436,9 @@ export function App() {
             onToggleTheme={toggleTheme}
           />
 
-          <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-            <AppNav
-              currentView={view}
-              onHome={() => setView('home')}
-              onNavigate={(nextView) => nextView === 'review'
-                ? (reviewContext.prNumber ? setView('review') : setView('prs'))
-                : handleChangeView(nextView)}
-              onOpenSettings={() => setView('config')}
-            />
             <div className="main-content">
               {renderView()}
             </div>
-          </div>
 
           <BottomBar
             currentView={view}
@@ -3453,6 +3473,7 @@ export function App() {
               <span>{statusMessage}</span>
             </div>
           )}
+          </div>
         </>
       ) : (
         <WelcomeScreen

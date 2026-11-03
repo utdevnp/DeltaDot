@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { View } from '../../core/types.js';
+import deltaDotLogo from '../../build/deltadot-logo.png';
 
 interface AppNavProps {
   currentView: View;
@@ -27,16 +28,28 @@ function isActive(itemView: NavItem['view'], currentView: View): boolean {
 }
 
 export function AppNav({ currentView, onNavigate, onHome, onOpenSettings }: AppNavProps) {
+  const [collapsed, setCollapsed] = useState(true);
+
+  const toggleCollapsed = () => setCollapsed((current) => !current);
+
   return (
-    <nav className="app-nav" aria-label="Primary navigation">
-      <button className={`app-nav-home ${currentView === 'home' ? 'active' : ''}`} type="button" aria-label="Home dashboard" title="Home dashboard" onClick={onHome}>
+    <nav className={`app-nav ${collapsed ? 'is-collapsed' : ''}`} aria-label="Primary navigation">
+      <div className="app-nav-brand" aria-label="DeltaDot Repository Monitoring">
+        <img className="app-nav-brand-logo" src={deltaDotLogo} alt="DeltaDot" />
+        <span className="app-nav-brand-copy"><strong>DeltaDot</strong><small>Repository Monitoring</small></span>
+        <button type="button" className="app-nav-collapse" onClick={toggleCollapsed} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m14 18-6-6 6-6" /><path d="M20 5v14" /></svg>
+        </button>
+      </div>
+      <div className="app-nav-items">
+      <button className={`app-nav-item app-nav-dashboard ${currentView === 'home' ? 'active' : ''}`} type="button" aria-label="Dashboard" title="Dashboard" onClick={onHome}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="m3 10 9-7 9 7" />
           <path d="M5 9v11h14V9" />
           <path d="M9 20v-6h6v6" />
         </svg>
+        <span>Dashboard</span>
       </button>
-      <div className="app-nav-items">
         {navItems.map((item) => (
           <button
             key={item.view}
@@ -44,9 +57,13 @@ export function AppNav({ currentView, onNavigate, onHome, onOpenSettings }: AppN
             className={`app-nav-item ${isActive(item.view, currentView) ? 'active' : ''}`}
             aria-label={item.label}
             title={item.label}
-            onClick={() => item.view === 'config' ? onOpenSettings() : onNavigate(item.view)}
+            onClick={() => {
+              if (item.view === 'config') onOpenSettings();
+              else onNavigate(item.view);
+            }}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{item.icon}</svg>
+            <span>{item.label}</span>
           </button>
         ))}
       </div>

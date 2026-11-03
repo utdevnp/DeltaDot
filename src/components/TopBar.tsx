@@ -17,6 +17,7 @@ interface TopBarProps {
   activeWorkspaceId: string | null;
   onSwitchWorkspace: (workspace: Workspace) => void;
   onAddWorkspace: () => void;
+  onSyncAll: () => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }
@@ -26,7 +27,7 @@ function folderName(p: string): string {
   return normalized.split(/[\\/]/).pop() || normalized;
 }
 
-export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, onEditWorkspace, onOpenConfig, workspaces, activeWorkspaceId, onSwitchWorkspace, onAddWorkspace, theme, onToggleTheme }: TopBarProps) {
+export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, onEditWorkspace, onOpenConfig, workspaces, activeWorkspaceId, onSwitchWorkspace, onAddWorkspace, onSyncAll, theme, onToggleTheme }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<{ version: string; name: string } | null>(null);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
@@ -182,6 +183,19 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
             <path d="M12 11v5" />
             <path d="M12 8h.01" />
           </svg>
+        </button>
+      </div>
+      <div className="dashboard-topbar-actions">
+        <button type="button" className="btn btn-outline btn-sm dashboard-topbar-settings" onClick={onOpenConfig} aria-label="Open settings" title="Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .3 1.8l.1.1-2.8 2.8-.1-.1a1.65 1.65 0 0 0-1.8-.3 1.65 1.65 0 0 0-1 1.5v.2h-4v-.2a1.65 1.65 0 0 0-1-1.5 1.65 1.65 0 0 0-1.8.3l-.1.1-2.8-2.8.1-.1A1.65 1.65 0 0 0 4.7 15a1.65 1.65 0 0 0-1.5-1H3v-4h.2a1.65 1.65 0 0 0 1.5-1 1.65 1.65 0 0 0-.3-1.8l-.1-.1 2.8-2.8.1.1a1.65 1.65 0 0 0 1.8.3 1.65 1.65 0 0 0 1-1.5V2h4v.2a1.65 1.65 0 0 0 1 1.5 1.65 1.65 0 0 0 1.8-.3l.1-.1 2.8 2.8-.1.1a1.65 1.65 0 0 0-.3 1.8 1.65 1.65 0 0 0 1.5 1h.2v4h-.2a1.65 1.65 0 0 0-1.5 1Z"/></svg>
+          Settings
+        </button>
+        <button type="button" className="btn btn-primary btn-sm dashboard-topbar-sync" onClick={onSyncAll} disabled={isSyncing} aria-label={isSyncing ? `Syncing ${syncProgress.done} of ${syncProgress.total}` : 'Sync all repositories'} title={isSyncing ? `Syncing ${syncProgress.done}/${syncProgress.total}` : 'Sync all repositories'}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-3"/></svg>
+          {isSyncing ? `Syncing ${syncProgress.done}/${syncProgress.total}` : 'Sync all'}
+        </button>
+        <button type="button" className="btn btn-outline btn-sm dashboard-topbar-theme" onClick={onToggleTheme} aria-label={`Theme: ${theme}`} title={`Theme: ${theme}`}>
+          {theme === 'dark' ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg> : theme === 'light' ? <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg> : <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>}
         </button>
       </div>
       {aboutOpen && (
