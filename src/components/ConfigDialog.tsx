@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { AppConfig, ConfigField } from '../../core/types.js';
+import type { AppConfig, ConfigField, Workspace } from '../../core/types.js';
 import { CONFIG_LABELS } from '../../core/types.js';
 
 interface ConfigDialogProps {
@@ -8,6 +8,12 @@ interface ConfigDialogProps {
   onClose: () => void;
   onBrowseWorkspace?: () => Promise<string | null>;
   fullPage?: boolean;
+  onCreateWorkspace?: () => void;
+  onDuplicateWorkspace?: (workspace: Workspace) => void;
+  workspaces?: Workspace[];
+  activeWorkspaceId?: string | null;
+  onEditWorkspace?: (workspace: Workspace) => void;
+  onDeleteWorkspace?: (workspace: Workspace) => Promise<void>;
 }
 
 type ConfigTab = 'workspace' | 'git' | 'jira' | 'ai' | 'appearance' | 'notifications' | 'shortcuts' | 'advanced';
@@ -26,7 +32,7 @@ const TABS: { id: ConfigTab; label: string }[] = [
 ];
 
 const TAB_FIELDS: Record<ConfigTab, ConfigField[]> = {
-  workspace: ['workspace', 'base', 'release', 'releaseStartDate', 'syncInterval'],
+  workspace: [],
   git: ['provider', 'token'],
   jira: ['taskProvider', 'jiraUrl', 'jiraEmail', 'jiraApiToken'],
   ai: ['aiProvider', 'aiApiKey', 'aiApiUrl', 'aiModel', 'aiSystemPrompt'],
@@ -75,10 +81,13 @@ const DROPDOWN_OPTIONS: Partial<Record<ConfigField, { value: string; label: stri
   ],
 };
 
-export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, fullPage = false }: ConfigDialogProps) {
+export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, onCreateWorkspace, onDuplicateWorkspace, workspaces = [], activeWorkspaceId, onEditWorkspace, onDeleteWorkspace, fullPage = false }: ConfigDialogProps) {
   const [form, setForm] = useState<AppConfig>({ ...config });
   const [activeTab, setActiveTab] = useState<ConfigTab>('workspace');
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const [visibleFields, setVisibleFields] = useState<Set<ConfigField>>(new Set());
 
   const toggleVisible = (field: ConfigField) => {
@@ -265,7 +274,7 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, fullP
       const shortcuts = [
         ['j / k', 'Navigate lists'], ['Enter', 'Open selected item'], ['r / R', 'Refresh / review'],
         ['s / S', 'Sync repo / all'], ['p / P', 'Open PRs'], ['K', 'Kubernetes'],
-        ['w / W', 'Workspace menu'], ['f / /', 'Filter / search'], [':', 'Command palette'],
+        ['w / W', 'Workspace menu'], ['x', 'Next branch pair (repository views)'], ['f / /', 'Filter / search'], [':', 'Command palette'],
         ['Esc / b', 'Back or close'], ['q', 'Quit'],
       ];
       return <div className="settings-info-card"><div>Shortcuts are global and remain active even when their hints are hidden from the footer.</div><div className="settings-shortcut-grid">{shortcuts.map(([key, label]) => <div className="settings-shortcut" key={key}><kbd>{key}</kbd><span>{label}</span></div>)}</div></div>;
@@ -334,18 +343,46 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, fullP
         }}>
           <form id="config-form" onSubmit={handleSubmit}>
             {/* Section description */}
-            {activeTab === 'workspace' && (
-              <div style={{
-                fontSize: 12,
-                color: 'var(--text-dim)',
-                marginBottom: 16,
-                lineHeight: 1.5,
-                padding: '8px 12px',
-                background: 'var(--bg-tertiary)',
-                borderRadius: 6,
-              }}>
-                Configure the workspace directory and branch comparison settings. The app scans all Git repositories under the workspace path and compares <strong style={{ color: 'var(--text-secondary)' }}>base</strong> against <strong style={{ color: 'var(--text-secondary)' }}>release</strong> branches.
+            {activeTab === 'workspace' && onCreateWorkspace && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                {onCreateWorkspace && <button type="button" className="btn btn-primary btn-sm settings-workspace-create" onClick={onCreateWorkspace}>Create Workspace</button>}
               </div>
+            )}
+            {activeTab === 'workspace' && workspaces.length > 0 && (
+              <section className="settings-workspaces" aria-label="Saved workspaces">
+                <div className="settings-workspaces-heading">Saved workspaces <span>{workspaces.length}</span></div>
+                <p className="settings-workspaces-description">Manage your workspaces. Deleting a workspace does not delete its folder or repositories.</p>
+                <ul className="settings-workspaces-list">
+                  {workspaces.map((workspace) => (
+                    <li key={workspace.id} className="settings-workspace-row">
+                      <div className="settings-workspace-details">
+                        <div className="settings-workspace-name">{workspace.displayName || workspace.name}{workspace.id === activeWorkspaceId && <span className="settings-workspace-active">Active</span>}</div>
+                        <div className="settings-workspace-path" title={workspace.path}>{workspace.path}</div>
+                        <div className="settings-workspace-pair-count">{workspace.config.branchPairs?.length || 1} {(workspace.config.branchPairs?.length || 1) === 1 ? 'branch pair' : 'branch pairs'}</div>
+                        {deletingId === workspace.id && <div className="settings-workspace-confirm" role="status">Remove this workspace from DeltaDot?</div>}
+                      </div>
+                      <div className="settings-workspace-actions">
+                        {deletingId === workspace.id ? <>
+                          <button type="button" className="btn btn-outline btn-sm" disabled={deleting} onClick={() => { setDeletingId(null); setDeleteError(''); }}>Cancel</button>
+                          <button type="button" className="btn btn-error btn-sm" disabled={deleting} onClick={async () => {
+                            if (!onDeleteWorkspace) return;
+                            setDeleting(true);
+                            setDeleteError('');
+                            try { await onDeleteWorkspace(workspace); setDeletingId(null); }
+                            catch (error) { setDeleteError(error instanceof Error ? error.message : String(error)); }
+                            finally { setDeleting(false); }
+                          }}>{deleting ? 'Deleting…' : 'Confirm delete'}</button>
+                        </> : <>
+                          <button type="button" className="btn btn-outline btn-sm" disabled={deleting} aria-label={`Edit ${workspace.displayName || workspace.name}`} onClick={() => onEditWorkspace?.(workspace)}>Edit</button>
+                          {onDuplicateWorkspace && <button type="button" className="btn btn-outline btn-sm" disabled={deleting} aria-label={`Duplicate ${workspace.displayName || workspace.name}`} onClick={() => onDuplicateWorkspace(workspace)}>Duplicate</button>}
+                          <button type="button" className="btn btn-outline btn-error btn-sm" disabled={deleting} aria-label={`Delete ${workspace.displayName || workspace.name}`} onClick={() => { setDeleteError(''); setDeletingId(workspace.id); }}>Delete</button>
+                        </>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {deleteError && <p role="alert" className="settings-workspace-error">{deleteError}</p>}
+              </section>
             )}
             {activeTab === 'git' && (
               <div style={{
@@ -624,9 +661,9 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, fullP
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
           >
-            Cancel
+            {activeTab === 'workspace' ? 'Close' : 'Cancel'}
           </button>
-          <button
+          {activeTab !== 'workspace' && <button
             type="submit"
             form="config-form"
             disabled={saving}
@@ -651,7 +688,7 @@ export function ConfigDialog({ config, onSave, onClose, onBrowseWorkspace, fullP
             }}
           >
             {saving ? 'Saving...' : 'Save & Apply'}
-          </button>
+          </button>}
         </div>
       </div>
     </div>

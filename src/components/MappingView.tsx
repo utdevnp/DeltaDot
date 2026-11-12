@@ -114,6 +114,7 @@ function SearchableSelect({ label, value, options, placeholder, onChange }: { la
 }
 
 interface Props {
+  workspaceId: string;
   repos: RepoState[];
   baseBranch: string;
   releaseBranch: string;
@@ -165,7 +166,7 @@ function deploymentAge(deployment?: KubeDeploymentSummary): string {
   return timestamp ? timeAgo(timestamp) : '';
 }
 
-export function MappingView({ repos, baseBranch, releaseBranch, provider, token, mappingTabs, legacyMappings, preferredContext, preferredTabId, preferredDisplay, editing, syncing, onEdit, onCancel, onPersist, onDisplayChange, onOpenPR }: Props) {
+export function MappingView({ workspaceId, repos, baseBranch, releaseBranch, provider, token, mappingTabs, legacyMappings, preferredContext, preferredTabId, preferredDisplay, editing, syncing, onEdit, onCancel, onPersist, onDisplayChange, onOpenPR }: Props) {
   const [contexts, setContexts] = useState<KubeContext[]>([]);
   const [tabs, setTabs] = useState<DeploymentMappingTab[]>(() => mappingTabs.length ? mappingTabs : [buildLegacyTab(legacyMappings, preferredContext)]);
   const [activeTabId, setActiveTabId] = useState(() => mappingTabs.find((tab) => tab.id === preferredTabId)?.id ?? mappingTabs[0]?.id ?? 'mapping-default');
@@ -188,6 +189,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   const preloadAttempted = useRef(new Set<string>());
   const [search, setSearch] = useState('');
   const [mappingDisplay, setMappingDisplay] = useState<'all' | 'domain'>(preferredDisplay);
+  const [columnPrefsLoaded, setColumnPrefsLoaded] = useState(false);
   const [hiddenColumnsByTab, setHiddenColumnsByTab] = useState<Record<string, string[]>>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('deltadot.mapping.columns-by-tab') ?? '{}');
@@ -271,6 +273,38 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
   const domainFilterOptions = [...(activeTab?.domains ?? []).map((domain) => ({ id: domain.id, name: domain.name })), { id: 'unassigned', name: 'Unassigned' }];
   const previousContextForLoad = useRef(selectedContext);
   const deploymentKey = (deployment: DeploymentOption) => `${deployment.context}/${deployment.namespace}/${deployment.name}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    let legacy: Record<string, string[]> = {};
+    try {
+      const saved = JSON.parse(localStorage.getItem('deltadot.mapping.columns-by-tab') ?? '{}');
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        legacy = Object.fromEntries(Object.entries(saved).map(([tabId, ids]) => [tabId,
+          Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string' && MAPPING_COLUMN_OPTIONS.some((option) => option.id === id)) : [],
+        ]));
+      }
+    } catch { /* Ignore an invalid legacy renderer preference. */ }
+    window.api.loadMappingColumnPrefs(legacy).then((preferences) => {
+      if (cancelled) return;
+      setHiddenColumnsByTab(preferences);
+      setColumnPrefsLoaded(true);
+      localStorage.removeItem('deltadot.mapping.columns-by-tab');
+    }).catch(() => {
+      if (!cancelled) setColumnPrefsLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.api.loadCurrentMappingReport(workspaceId).then((report) => {
+      if (cancelled || !report) return;
+      setReportSnapshot(report as MappingReportSnapshot);
+      setReportOpen(true);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [workspaceId]);
 
   useEffect(() => {
     if (domainFilterIds === null) return;
@@ -527,10 +561,12 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
       setLoadedMappings((current) => current.map(updateMapping));
     }
     onPersist(nextTabs, activeTabId);
-    setReportSnapshot((current) => current ? {
-      ...current,
-      rows: current.rows.map((row) => row.mapping.id === mappingId ? { ...row, mapping: updateMapping(row.mapping) } : row),
-    } : current);
+    const nextReport = {
+      ...reportSnapshot,
+      rows: reportSnapshot.rows.map((row) => row.mapping.id === mappingId ? { ...row, mapping: updateMapping(row.mapping) } : row),
+    };
+    setReportSnapshot(nextReport);
+    void window.api.saveCurrentMappingReport(workspaceId, nextReport).catch(() => undefined);
   };
   const generateReport = async () => {
     if (!activeTab || reportLoading) return;
@@ -577,15 +613,17 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         }
       }));
 
-      setReportSnapshot((current) => current ? {
-        ...current,
-        rows: current.rows.map((row) => {
+      const completedReport = {
+        ...snapshot,
+        rows: snapshot.rows.map((row) => {
           const repoPath = row.mapping.repoPath;
           if (!repoPath || row.mapping.noRepo) return { ...row, prLoading: false, prs: [] };
           const result = prResults.get(repoPath);
           return { ...row, prLoading: false, prs: result?.prs ?? [], prHasMore: result?.hasMore ?? false, prError: result?.error };
         }),
-      } : current);
+      };
+      setReportSnapshot(completedReport);
+      await window.api.saveCurrentMappingReport(workspaceId, completedReport).catch(() => undefined);
     } finally {
       setReportLoading(false);
     }
@@ -910,7 +948,16 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
     return () => window.removeEventListener('keydown', handler);
   }, [draft, selectedMappingId, editing, drawerDraft, tabEditor, detailMappingId, contextMenu]);
 
-  useEffect(() => { localStorage.setItem('deltadot.mapping.columns-by-tab', JSON.stringify(hiddenColumnsByTab)); }, [hiddenColumnsByTab]);
+  useEffect(() => {
+    if (!columnPrefsLoaded) return;
+    void window.api.saveMappingColumnPrefs(hiddenColumnsByTab).catch(() => undefined);
+  }, [hiddenColumnsByTab, columnPrefsLoaded]);
+
+  const closeReport = () => {
+    setReportSnapshot(null);
+    setReportOpen(false);
+    void window.api.saveCurrentMappingReport(workspaceId, null).catch(() => undefined);
+  };
 
   return <section className={`mapping-view ${hiddenMappingColumns.map((id) => `mapping-hide-column-${id}`).join(' ')}`}>
     <header className="repo-view-toolbar mapping-header">
@@ -933,7 +980,7 @@ export function MappingView({ repos, baseBranch, releaseBranch, provider, token,
         <button type="button" role="tab" aria-selected={!reportOpen && tab.id === activeTab?.id} className="mapping-tab" disabled={editing || !!drawerDraft || !!tabEditor} onClick={() => activateTab(tab.id)}><span>{tab.name}</span></button>
       </div>)}{reportSnapshot && <div className={`mapping-tab-shell mapping-report-tab ${reportOpen ? 'active' : ''}`}>
         <button type="button" role="tab" aria-selected={reportOpen} className="mapping-tab" onClick={() => setReportOpen(true)}><span>Report · {reportSnapshot.title}</span></button>
-        <button type="button" className="mapping-report-tab-close" aria-label="Close report tab" title="Close report tab" onClick={() => { setReportSnapshot(null); setReportOpen(false); }}>×</button>
+        <button type="button" className="mapping-report-tab-close" aria-label="Close report tab" title="Close report tab" onClick={closeReport}>×</button>
       </div>}</div>
       <div className="mapping-tab-actions">
         {!reportOpen && <>

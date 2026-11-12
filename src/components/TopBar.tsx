@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { SPINNER } from '../../core/utils.js';
 import { timeAgo } from '../../core/utils.js';
-import type { ThemeMode, Workspace } from '../../core/types.js';
+import type { ThemeMode, Workspace, BranchPair } from '../../core/types.js';
 
 interface TopBarProps {
   workspacePath: string;
   base: string;
   release: string;
+  branchPairs: BranchPair[];
+  activeBranchPairId: string;
+  onSwitchBranchPair: (id: string) => void;
   repoCount: number;
   isSyncing: boolean;
   syncProgress: { done: number; total: number };
@@ -27,7 +30,7 @@ function folderName(p: string): string {
   return normalized.split(/[\\/]/).pop() || normalized;
 }
 
-export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syncProgress, lastSync, onEditWorkspace, onOpenConfig, workspaces, activeWorkspaceId, onSwitchWorkspace, onAddWorkspace, onSyncAll, theme, onToggleTheme }: TopBarProps) {
+export function TopBar({ workspacePath, branchPairs, activeBranchPairId, onSwitchBranchPair, repoCount, isSyncing, syncProgress, lastSync, onEditWorkspace, onOpenConfig, workspaces, activeWorkspaceId, onSwitchWorkspace, onAddWorkspace, onSyncAll, theme, onToggleTheme }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<{ version: string; name: string } | null>(null);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
@@ -85,9 +88,9 @@ export function TopBar({ workspacePath, base, release, repoCount, isSyncing, syn
       <span className="separator">│</span>
       <div className="diff-scope" title="Commits on release not in base">
         <span className="diff-scope-label">DIFF SCOPE</span>
-        <span className="value">{release}</span>
-        <span className="arrow">→</span>
-        <span className="value">{base}</span>
+        <select className="select select-sm branch-pair-select" aria-label="Branch comparison" value={activeBranchPairId} onChange={(event) => onSwitchBranchPair(event.target.value)}>
+          {branchPairs.map((pair, index) => <option key={pair.id} value={pair.id}>{pair.release} → {pair.base}{branchPairs.filter((item) => item.base === pair.base && item.release === pair.release).length > 1 ? ` · ${pair.releaseStartDate || 'No date'} · ${index + 1}` : ''}</option>)}
+        </select>
       </div>
       <span className="separator">│</span>
       <div className="info-group">

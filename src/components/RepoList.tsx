@@ -13,6 +13,7 @@ interface RepoListProps {
   syncProgress: { done: number; total: number };
   base: string;
   release: string;
+  onSwitchBranchPair: () => void;
   onSyncAll: () => void;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
@@ -97,7 +98,7 @@ function RemoveRepoDialog({ repo, onCancel, onRemove }: { repo: RepoState; onCan
   </section></div>;
 }
 
-export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, base, release, onSyncAll, searchQuery, onSearchQueryChange, onOpenCommits, onRemoveRepo, onOpenPRs, onSyncRepo, onForceFetchComplete, onOpenCompare, onOpenRemote, onCopyPath, onCopyRemote, ignoredRepoPaths, onToggleIgnoreRepo, openPRCounts, statusFilter, onStatusFilterChange }: RepoListProps) {
+export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, base, release, onSwitchBranchPair, onSyncAll, searchQuery, onSearchQueryChange, onOpenCommits, onRemoveRepo, onOpenPRs, onSyncRepo, onForceFetchComplete, onOpenCompare, onOpenRemote, onCopyPath, onCopyRemote, ignoredRepoPaths, onToggleIgnoreRepo, openPRCounts, statusFilter, onStatusFilterChange }: RepoListProps) {
   const [frame, setFrame] = useState(0);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; repo: RepoState } | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
@@ -153,7 +154,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, b
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div className="repo-view-toolbar">
-          <div><strong>Repositories</strong><span className="repo-view-scope">Checking {release} → {base}</span></div>
+          <div><strong>Repositories</strong><span className="repo-view-scope">Comparison: {release} → {base} <button type="button" className="btn btn-link repo-switch-pair" onClick={onSwitchBranchPair} title="Switch to next branch pair (x)">switch</button></span></div>
           <div className="repo-view-actions">
             <input className="repo-search-input" value={searchQuery} onChange={(e) => onSearchQueryChange(e.target.value)} placeholder="Search repos..." aria-label="Search repositories" />
             {statusChip('all', 'repo-status-chip-all', 'All repositories', availableRepos.length)}
@@ -177,7 +178,7 @@ export function RepoList({ repos, selected, onSelect, isSyncing, syncProgress, b
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div className="repo-view-toolbar">
-        <div><strong>Repositories</strong><span className="repo-view-scope">Checking {release} → {base}</span></div>
+        <div><strong>Repositories</strong><span className="repo-view-scope">Comparison: {release} → {base} <button type="button" className="btn btn-link repo-switch-pair" onClick={onSwitchBranchPair} title="Switch to next branch pair (x)">switch</button></span></div>
         <div className="repo-view-actions">
           <input className="repo-search-input" value={searchQuery} onChange={(e) => onSearchQueryChange(e.target.value)} placeholder="Search repos..." aria-label="Search repositories" />
           {statusChip('all', 'repo-status-chip-all', 'All repositories', availableRepos.length)}

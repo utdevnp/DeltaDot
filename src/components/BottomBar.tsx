@@ -109,6 +109,10 @@ export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
     else keys = common;
   }
 
+  if (['home', 'list', 'commits', 'detail', 'prs', 'prdetail', 'review'].includes(currentView)) {
+    keys = [...keys, { key: 'x', desc: 'next branch pair' }];
+  }
+
   return (
     <div className="bottom-bar">
       {keys.map((k, i) => (
@@ -120,7 +124,7 @@ export function BottomBar({ currentView, k8sMenuMode }: BottomBarProps) {
           </span>
         </React.Fragment>
       ))}
-      <span className="bottom-bar-version">DeltaDot {version || 'v1.1.2'}</span>
+      <span className="bottom-bar-version">{version ? `DeltaDot ${version}` : 'DeltaDot'}</span>
     </div>
   );
 }

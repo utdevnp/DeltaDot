@@ -22,11 +22,20 @@ export const WORKSPACE_COLORS = [
   '#06b6d4', '#f97316', '#ec4899', '#8b5cf6', '#14b8a6',
 ] as const;
 
+export interface BranchPair {
+  id: string;
+  base: string;
+  release: string;
+  releaseStartDate?: string;
+}
+
 export interface AppConfig {
   workspace: string;
   base: string;
   release: string;
   releaseStartDate?: string;
+  branchPairs?: BranchPair[];
+  activeBranchPairId?: string;
   syncInterval: number;
   token: string;
   provider: Provider;

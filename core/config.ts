@@ -1,8 +1,8 @@
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync, statSync } from 'fs';
-import { readdirSync } from 'fs';
+import { database } from './sqlite-storage.js';
 import type { AppConfig, CacheFile, RepoState, Workspace } from './types.js';
 
 export function dataDir(): string {
@@ -22,91 +22,55 @@ export function workspaceConfigPath(workspaceId: string): string {
 }
 
 export async function loadGlobalConfig(): Promise<Partial<AppConfig>> {
-  try {
-    const raw = await readFile(globalConfigPath(), 'utf8');
-    return JSON.parse(raw) as Partial<AppConfig>;
-  } catch { return {}; }
+  return database().loadGlobalConfig();
 }
 
 export async function saveGlobalConfig(cfg: AppConfig): Promise<void> {
-  try {
-    const dir = dataDir();
-    await mkdir(dir, { recursive: true });
-    await writeFile(globalConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
-  } catch { /* non-fatal */ }
+  database().saveGlobalConfig(cfg);
 }
 
 export async function loadWorkspaces(): Promise<Workspace[]> {
-  try {
-    const raw = await readFile(workspacesFilePath(), 'utf8');
-    return JSON.parse(raw) as Workspace[];
-  } catch { return []; }
+  return database().loadWorkspaces();
 }
 
 export async function saveWorkspaces(workspaces: Workspace[]): Promise<void> {
-  try {
-    await mkdir(dataDir(), { recursive: true });
-    await writeFile(workspacesFilePath(), JSON.stringify(workspaces, null, 2), 'utf8');
-  } catch { /* non-fatal */ }
+  database().saveWorkspaces(workspaces);
 }
 
 export async function loadWorkspaceConfig(workspaceId: string): Promise<Partial<AppConfig>> {
-  try {
-    const raw = await readFile(workspaceConfigPath(workspaceId), 'utf8');
-    return JSON.parse(raw) as Partial<AppConfig>;
-  } catch { return {}; }
+  return database().loadWorkspaceConfig(workspaceId);
 }
 
 export async function saveWorkspaceConfig(workspaceId: string, config: AppConfig): Promise<void> {
-  try {
-    await mkdir(join(dataDir(), 'workspaces', workspaceId), { recursive: true });
-    await writeFile(workspaceConfigPath(workspaceId), JSON.stringify(config, null, 2), 'utf8');
-  } catch { /* non-fatal */ }
+  database().saveWorkspaceConfig(workspaceId, config);
 }
 
 export async function loadActiveWorkspaceId(): Promise<string | null> {
-  try {
-    const raw = await readFile(join(dataDir(), 'active-workspace'), 'utf8');
-    return raw.trim() || null;
-  } catch { return null; }
+  return database().loadActiveWorkspaceId();
 }
 
 export async function saveActiveWorkspaceId(id: string): Promise<void> {
-  try {
-    await mkdir(dataDir(), { recursive: true });
-    await writeFile(join(dataDir(), 'active-workspace'), id, 'utf8');
-  } catch { /* non-fatal */ }
+  database().saveActiveWorkspaceId(id);
 }
 
 export async function loadKubeContext(): Promise<string | null> {
-  try {
-    const raw = await readFile(join(dataDir(), 'kube-context'), 'utf8');
-    return raw.trim() || null;
-  } catch { return null; }
+  return database().loadKubeContext();
 }
 
 export async function saveKubeContext(contextName: string): Promise<void> {
-  try {
-    await mkdir(dataDir(), { recursive: true });
-    await writeFile(join(dataDir(), 'kube-context'), contextName, 'utf8');
-  } catch { /* non-fatal */ }
+  database().saveKubeContext(contextName);
 }
 
 export function cachePath(workspacePath: string): string {
   return join(workspacePath, '.deltadot-cache.json');
 }
 
-export async function loadCache(workspacePath: string): Promise<CacheFile | null> {
-  try {
-    const raw = await readFile(cachePath(workspacePath), 'utf8');
-    return JSON.parse(raw) as CacheFile;
-  } catch { return null; }
+export async function loadCache(workspacePath: string, base?: string, release?: string): Promise<CacheFile | null> {
+  return database().loadCache(workspacePath, base, release);
 }
 
 export async function saveCache(data: CacheFile): Promise<void> {
-  try {
-    await writeFile(cachePath(data.workspace), JSON.stringify(data, null, 2), 'utf8');
-  } catch { /* non-fatal */ }
+  database().saveCache(data);
 }
 
 export function findGitRepos(workspacePath: string): string[] {

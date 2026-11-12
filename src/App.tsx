@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeContextSettings, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind, DeploymentMappingTab } from '../core/types.js';
+import type { AppConfig, RepoState, View, CommitDetail, PR, PRDetail, JiraIssue, ConfigField, ThemeMode, Workspace, Provider, KubeContext, KubeContextSettings, KubeDeploymentSummary, KubeDeploymentDetail, KubeContextTab, KubeWorkloadTab, KubeCompareTab, KubeResourceKind, DeploymentMappingTab, BranchPair } from '../core/types.js';
 import type { KubeActivityEntry } from './components/dashboard/types.js';
 import { summarizeKubePods } from '../core/k8s-compare.js';
+import { nextBranchPair, workspaceNeedsInitialSync } from '../core/workspace-cache.js';
 import { getVisibleConfigFields, KUBE_RESOURCE_OPTIONS, WORKSPACE_COLORS } from '../core/types.js';
 import { getPRsUrl } from '../core/urls.js';
 import { TopBar } from './components/TopBar';
@@ -149,6 +150,10 @@ export function App() {
   // Workspace management
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const workspaceGenerationRef = useRef(0);
+  const workspaceReadyRef = useRef(false);
+  const syncRunRef = useRef<number | null>(null);
+  const [pendingInitialSync, setPendingInitialSync] = useState<number | null>(null);
   // Keep the workspace rail compact by default; users can expand it from the rail control.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
@@ -168,6 +173,7 @@ export function App() {
   // Clone dialog
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [showAddWorkspace, setShowAddWorkspace] = useState(false);
+  const [duplicateWorkspace, setDuplicateWorkspace] = useState<Workspace | null>(null);
   const [editWorkspace, setEditWorkspace] = useState<Workspace | null>(null);
 
   // Search / Command
@@ -335,9 +341,11 @@ export function App() {
   // ─── Initialize ──────────────────────────────────────────────────────────
 
   useEffect(() => {
+    const generation = workspaceGenerationRef.current;
     (async () => {
       try {
         const wsList = await window.api.loadWorkspaces();
+        if (generation !== workspaceGenerationRef.current) return;
         setWorkspaces(wsList);
 
         let config: AppConfig | null = null;
@@ -346,7 +354,7 @@ export function App() {
         if (wsList.length > 0) {
           // Use the last active workspace (saved to active-workspace file), or first one
           const activeId = await window.api.loadActiveWorkspaceId();
-          wsId = (activeId as string) || wsList[0]!.id;
+          wsId = wsList.some((workspace) => workspace.id === activeId) ? activeId : wsList[0]!.id;
           if (wsId) {
             try {
               config = await window.api.activateWorkspace(wsId);
@@ -378,6 +386,7 @@ export function App() {
           wsId = normalizedPath;
         }
 
+        if (generation !== workspaceGenerationRef.current) return;
         setCfg(config);
         setWorkspacePath(config.workspace || '');
         if (wsId) setActiveWorkspaceId(wsId);
@@ -390,18 +399,18 @@ export function App() {
 
         if (config.workspace) {
           const paths = await window.api.findRepos(config.workspace);
+          const cache = await window.api.loadCache(config.workspace, config.base, config.release);
+          if (generation !== workspaceGenerationRef.current) return;
           setRepoPaths(paths);
-
-          const cache = await window.api.loadCache(config.workspace);
           let initialRepos: RepoState[];
           let lastSyncTime = '';
 
           if (cache && cache.base === config.base && cache.release === config.release) {
             initialRepos = paths.map((p: string) => {
               const name = p.split('/').pop() ?? p;
-              const cached = cache.repos.find((r: RepoState) => r.name === name);
+              const cached = cache.repos.find((r: RepoState) => r.path === p);
               return cached
-                ? { ...cached, status: 'stale' as const }
+                ? cached
                 : { name, path: p, status: 'stale' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null };
             });
             lastSyncTime = cache.lastFullSync;
@@ -413,11 +422,16 @@ export function App() {
             }));
           }
 
-          if (cache?.prs) setPRs(cache.prs);
+          if (cache && cache.base === config.base && cache.release === config.release && cache.prs) setPRs(cache.prs);
           setRepos(initialRepos);
           setLastSync(lastSyncTime);
+          workspaceReadyRef.current = true;
+          if (workspaceNeedsInitialSync(paths, cache, config)) {
+            setPendingInitialSync(generation);
+          }
         }
       } catch (err) {
+        if (generation !== workspaceGenerationRef.current) return;
         setStatusMessage('Failed to initialize: ' + (err instanceof Error ? err.message : String(err)));
       }
     })();
@@ -467,55 +481,91 @@ export function App() {
 
   // ─── Workspace Management ─────────────────────────────────────────────────
 
-  const switchWorkspace = useCallback(async (ws: Workspace) => {
+  const switchWorkspace = useCallback(async (ws: Workspace, preserveView = false) => {
+    const generation = ++workspaceGenerationRef.current;
+    workspaceReadyRef.current = false;
+    syncRunRef.current = null;
+    setPendingInitialSync(null);
+    setIsSyncing(false);
+    setSyncProgress({ done: 0, total: 0 });
     try {
       const config = await window.api.activateWorkspace(ws.id);
+      if (generation !== workspaceGenerationRef.current) return;
+      const paths = config.workspace ? await window.api.findRepos(config.workspace) : [];
+      const cache = config.workspace ? await window.api.loadCache(config.workspace, config.base, config.release) : null;
+      if (generation !== workspaceGenerationRef.current) return;
+      const matchesCache = !!cache && cache.base === config.base && cache.release === config.release;
+      const newRepos: RepoState[] = paths.map((path: string) => {
+        const cached = matchesCache ? cache.repos.find((repo) => repo.path === path) : undefined;
+        if (cached) return cached;
+        return { name: path.split('/').pop() ?? path, path, status: 'stale', diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null };
+      });
       setActiveWorkspaceId(ws.id);
       setCfg(config);
       setWorkspacePath(config.workspace);
-      setPRs([]);
+      setRepoPaths(paths);
+      setRepos(newRepos);
+      setPRs(matchesCache ? cache.prs ?? [] : []);
       setLastPRSync('');
+      setPRLoading(false);
+      setPRError('');
+      setLastSync(matchesCache ? cache.lastFullSync : '');
       setRepoPRTabs([]);
       setActiveRepoPRTab('');
       setRepoCommitTabs([]);
       setActiveRepoCommitTab('');
       setActiveRepoInspectorTab('');
-      // Reset any stale loading state from a previous/sync that might have been interrupted
-      setIsSyncing(false);
-      setSyncProgress({ done: 0, total: 0 });
-      let newRepos: RepoState[] = [];
-      if (config.workspace) {
-        const paths = await window.api.findRepos(config.workspace);
-        setRepoPaths(paths);
-        const cache = await window.api.loadCache(config.workspace);
-        let lastSyncTime = '';
-        if (cache && cache.base === config.base && cache.release === config.release) {
-          newRepos = paths.map((p: string) => {
-            const name = p.split('/').pop() ?? p;
-            const cached = cache.repos.find((r: RepoState) => r.name === name);
-            return cached ? { ...cached, status: 'stale' as const } : { name, path: p, status: 'stale' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null };
-          });
-          if (cache?.prs) setPRs(cache.prs);
-          lastSyncTime = cache.lastFullSync;
-          setLastSync(lastSyncTime);
-        } else {
-          newRepos = paths.map((p: string) => ({ name: p.split('/').pop() ?? p, path: p, status: 'stale' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: null }));
-        }
-        setRepos(newRepos);
-        // Repos will be synced on initial load via the initialSyncDone effect.
-        // On workspace switch, just show cached data without syncing all repos again.
+      if (!preserveView) {
+        setView(config.defaultView === 'prs' ? 'prs' : 'list');
+        setPrAllRepos(config.defaultView === 'prs');
       }
-      setView(config.defaultView === 'prs' ? 'prs' : 'list');
-      setPrAllRepos(config.defaultView === 'prs');
       setSelectedRepo(0);
+      workspaceReadyRef.current = true;
+      if (workspaceNeedsInitialSync(paths, cache, config)) {
+        setPendingInitialSync(generation);
+      }
     } catch (err) {
+      if (generation !== workspaceGenerationRef.current) return;
       console.error('switchWorkspace error:', err);
       showStatus('Failed to switch workspace: ' + (err instanceof Error ? err.message : String(err)), true);
     }
   }, []);
 
+  const handleSwitchBranchPair = useCallback(async (id: string) => {
+    if (!cfg || !activeWorkspaceId || !workspaceReadyRef.current) return;
+    const pairs: BranchPair[] = cfg.branchPairs?.length ? cfg.branchPairs : [{ id: 'default', base: cfg.base, release: cfg.release, releaseStartDate: cfg.releaseStartDate ?? '' }];
+    const pair = pairs.find((item) => item.id === id);
+    if (!pair || (cfg.activeBranchPairId ?? pairs[0]!.id) === id) return;
+    const generation = ++workspaceGenerationRef.current;
+    workspaceReadyRef.current = false;
+    syncRunRef.current = null;
+    setPendingInitialSync(null);
+    setIsSyncing(false);
+    setSyncProgress({ done: 0, total: 0 });
+    try {
+      const workspaces = await window.api.loadWorkspaces();
+      const workspace = workspaces.find((item) => item.id === activeWorkspaceId);
+      if (!workspace || generation !== workspaceGenerationRef.current) return;
+      const { theme: _theme, ...config } = { ...cfg, branchPairs: pairs, activeBranchPairId: pair.id, base: pair.base, release: pair.release, releaseStartDate: pair.releaseStartDate ?? '' };
+      await window.api.saveWorkspaceConfig(workspace.id, config as AppConfig);
+      if (generation !== workspaceGenerationRef.current) return;
+      const updated = { ...workspace, config: config as AppConfig };
+      setWorkspaces((previous) => previous.map((item) => item.id === workspace.id ? updated : item));
+      await switchWorkspace(updated, true);
+    } catch (error) {
+      if (generation === workspaceGenerationRef.current) { workspaceReadyRef.current = true; showStatus('Failed to switch branch comparison: ' + (error instanceof Error ? error.message : String(error)), true); }
+    }
+  }, [cfg, activeWorkspaceId, switchWorkspace, showStatus]);
+
+  const cycleBranchPair = useCallback(() => {
+    const pair = nextBranchPair(cfg?.branchPairs ?? [], cfg?.activeBranchPairId);
+    if (pair) void handleSwitchBranchPair(pair.id);
+    else showStatus('Add another branch pair in workspace settings to switch comparisons.', true);
+  }, [cfg, handleSwitchBranchPair, showStatus]);
+
   // Sync all repos with given config directly (bypasses stale closure in syncAll)
   const syncOneRepoDirect = useCallback(async (paths: string[], config: AppConfig) => {
+    const generation = workspaceGenerationRef.current;
     setIsSyncing(true);
     setSyncProgress({ done: 0, total: paths.length });
     const results: RepoState[] = [];
@@ -527,6 +577,7 @@ export function App() {
       } catch (err) {
         results.push({ name: p.split('/').pop() ?? p, path: p, status: 'error' as const, diffCommits: [], latestCommits: [], latestVersion: null, latestVersionDate: null, currentBranch: '', lastCommitMsg: '', lastCommitAge: '', lastCommitAuthor: '', error: err instanceof Error ? err.message : String(err) });
       }
+      if (generation !== workspaceGenerationRef.current) return;
       done++;
       setSyncProgress({ done, total: paths.length });
       setRepos((prev) => {
@@ -583,105 +634,103 @@ export function App() {
   // ─── Workspace Selection ──────────────────────────────────────────────────
 
   const selectWorkspace = useCallback(async () => {
+    setDuplicateWorkspace(null);
     setShowAddWorkspace(true);
   }, []);
 
-  const handleAddWorkspaceSave = useCallback(async (name: string, folder: string, base: string, release: string, syncInterval: number, color: string) => {
-    setShowAddWorkspace(false);
-    const normalizedPath = folder.replace(/\/+$/, '');
-    // Check if workspace with this path already exists
-    const existing = workspaces.find((w) => w.path === normalizedPath || w.path === folder);
-    if (existing) {
-      // Update existing workspace's branches/interval
-      const updated = {
-        ...existing,
-        name: name || existing.name,
-        displayName: name || existing.displayName || existing.name,
-        color,
-        config: { ...existing.config, base, release, syncInterval },
-      };
-      await window.api.saveWorkspaceConfig(updated.id, updated.config);
-      // Also update the workspaces list
-      const allWs = await window.api.loadWorkspaces();
-      const idx = allWs.findIndex((w) => w.id === updated.id);
-      if (idx !== -1) {
-        allWs[idx] = updated;
-        await window.api.saveWorkspaces(allWs);
-      }
-      setWorkspaces(allWs);
-      await switchWorkspace(updated);
-      return;
-    }
-    const isDefault = workspaces.length === 0;
+  const handleDuplicateWorkspace = useCallback((workspace: Workspace) => {
+    setDuplicateWorkspace(workspace);
+    setShowAddWorkspace(true);
+  }, []);
+
+  const handleAddWorkspaceSave = useCallback(async (name: string, folder: string, base: string, release: string, syncInterval: number, color: string, releaseStartDate: string, branchPairs: BranchPair[], activeBranchPairId: string) => {
+    const normalizedPath = folder.replace(/[\\/]+$/, '') || folder;
+    const currentWorkspaces = await window.api.loadWorkspaces();
+    const source = duplicateWorkspace && currentWorkspaces.find((workspace) => workspace.id === duplicateWorkspace.id);
+    if (duplicateWorkspace && !source) throw new Error('The workspace to duplicate no longer exists.');
+    const sourceConfig = source?.config ?? cfg;
+    if (!sourceConfig) throw new Error('Workspace settings are not available.');
+    const { theme: _theme, ...copiedConfig } = sourceConfig;
+    const workspaceConfig = source ? copiedConfig : {
+      token: sourceConfig.token, provider: sourceConfig.provider,
+      taskProvider: sourceConfig.taskProvider, jiraUrl: sourceConfig.jiraUrl,
+      jiraEmail: sourceConfig.jiraEmail, jiraApiToken: sourceConfig.jiraApiToken,
+      aiProvider: sourceConfig.aiProvider, aiApiKey: sourceConfig.aiApiKey,
+      aiApiUrl: sourceConfig.aiApiUrl, aiModel: sourceConfig.aiModel,
+      aiSystemPrompt: sourceConfig.aiSystemPrompt,
+    };
     const ws: Workspace = {
-      id: normalizedPath,
+      id: crypto.randomUUID(),
       name,
+      displayName: name,
       path: normalizedPath,
       color,
-      isDefault,
-      config: {
-        workspace: normalizedPath,
-        base,
-        release,
-        syncInterval,
-        token: cfg?.token ?? '',
-        provider: cfg?.provider ?? 'github',
-        taskProvider: cfg?.taskProvider ?? 'none',
-        jiraUrl: cfg?.jiraUrl ?? '',
-        jiraEmail: cfg?.jiraEmail ?? '',
-        jiraApiToken: cfg?.jiraApiToken ?? '',
-        aiProvider: cfg?.aiProvider ?? 'none',
-        aiApiKey: cfg?.aiApiKey ?? '',
-        aiApiUrl: cfg?.aiApiUrl ?? '',
-        aiModel: cfg?.aiModel ?? '',
-        aiSystemPrompt: cfg?.aiSystemPrompt ?? '',
-        theme: cfg?.theme ?? 'system',
-      },
+      isDefault: currentWorkspaces.length === 0,
+      config: { ...workspaceConfig, workspace: normalizedPath, base, release, syncInterval, releaseStartDate, branchPairs, activeBranchPairId } as AppConfig,
     };
     const wsList = await window.api.addWorkspace(ws);
     setWorkspaces(wsList);
+    setShowAddWorkspace(false);
+    setDuplicateWorkspace(null);
+    setShowConfig(false);
     await switchWorkspace(ws);
-  }, [workspaces, cfg, switchWorkspace]);
+  }, [duplicateWorkspace, cfg, switchWorkspace]);
 
   const handleEditWorkspaceSave = useCallback(async (
-    id: string, name: string, folder: string, base: string, release: string, syncInterval: number, color: string
+    id: string, name: string, folder: string, base: string, release: string, syncInterval: number, color: string, releaseStartDate: string, branchPairs: BranchPair[], activeBranchPairId: string
   ) => {
+    const currentWorkspaces = await window.api.loadWorkspaces();
+    const ws = currentWorkspaces.find((workspace: Workspace) => workspace.id === id);
+    if (!ws) throw new Error('Workspace not found for editing.');
+    const path = folder.replace(/[\\/]+$/, '') || folder;
+    const updated: Workspace = {
+      ...ws, name, displayName: name, path, color,
+      config: { ...ws.config, base, release, syncInterval, releaseStartDate, branchPairs, activeBranchPairId, workspace: path },
+    };
+    const newList = currentWorkspaces.map((workspace: Workspace) => workspace.id === id ? updated : workspace);
+    await window.api.saveWorkspaces(newList);
+    setWorkspaces(newList);
     setEditWorkspace(null);
-    try {
-      // Read fresh workspace list from IPC to avoid stale closure
-      const currentWorkspaces = await window.api.loadWorkspaces();
-      const ws = currentWorkspaces.find((w: Workspace) => w.id === id);
-      if (!ws) {
-        showStatus('Workspace not found for editing', true);
-        return;
-      }
-      const updated: Workspace = {
-        ...ws,
-        name,
-        displayName: name,
-        path: folder,
-        color,
-        config: { ...ws.config, base, release, syncInterval, workspace: folder },
-      };
-      // Save config to per-workspace file
-      const configId = updated.path;
-      await window.api.saveWorkspaceConfig(configId, updated.config);
-      // Update workspaces list: replace the entry
-      const newList = currentWorkspaces.map((w: Workspace) =>
-        w.id === id ? { ...updated, id: configId } : w
-      );
-      await window.api.saveWorkspaces(newList);
-      setWorkspaces(newList);
-      if (id === activeWorkspaceId) {
-        setActiveWorkspaceId(configId);
-        setWorkspacePath(updated.path);
-        setCfg({ ...cfg!, ...updated.config });
-      }
-    } catch (err) {
-      console.error('handleEditWorkspaceSave error:', err);
-      showStatus('Failed to save workspace changes: ' + (err instanceof Error ? err.message : String(err)), true);
+    if (id === activeWorkspaceId) {
+      setShowConfig(false);
+      await switchWorkspace(updated);
     }
-  }, [activeWorkspaceId, cfg]);
+  }, [activeWorkspaceId, switchWorkspace]);
+
+  const handleDeleteWorkspace = useCallback(async (workspace: Workspace) => {
+    const deletingActive = workspace.id === activeWorkspaceId;
+    if (deletingActive) {
+      ++workspaceGenerationRef.current;
+      workspaceReadyRef.current = false;
+      syncRunRef.current = null;
+      setPendingInitialSync(null);
+      setIsSyncing(false);
+      setSyncProgress({ done: 0, total: 0 });
+    }
+    try {
+      const remaining = await window.api.removeWorkspace(workspace.id);
+      setWorkspaces(remaining);
+      if (!deletingActive) return;
+      if (remaining.length > 0) {
+        setShowConfig(false);
+        await switchWorkspace(remaining[0]!);
+      } else {
+        setActiveWorkspaceId(null);
+        setWorkspacePath('');
+        setCfg((previous) => previous ? { ...previous, workspace: '' } : previous);
+        setRepoPaths([]);
+        setRepos([]);
+        setPRs([]);
+        setLastSync('');
+        setLastPRSync('');
+        setShowConfig(false);
+        setView('list');
+      }
+    } catch (error) {
+      if (deletingActive) workspaceReadyRef.current = true;
+      throw error;
+    }
+  }, [activeWorkspaceId, switchWorkspace]);
 
   // Simple folder picker — just returns path, no side effects
   const browseWorkspace = useCallback(async (): Promise<string | null> => {
@@ -695,7 +744,10 @@ export function App() {
   // ─── Sync ─────────────────────────────────────────────────────────────────
 
   const syncAll = useCallback(async () => {
-    if (!cfg || repoPaths.length === 0) return;
+    if (!cfg || repoPaths.length === 0 || !workspaceReadyRef.current) return;
+    const generation = workspaceGenerationRef.current;
+    if (syncRunRef.current === generation) return;
+    syncRunRef.current = generation;
     setIsSyncing(true);
     setSyncProgress({ done: 0, total: repoPaths.length });
 
@@ -706,6 +758,7 @@ export function App() {
       window.api.syncOneRepo(path, cfg.base, cfg.release)
         .then((result) => {
           results[i] = result;
+          if (generation !== workspaceGenerationRef.current) return;
           completed++;
           setRepos((prev) => {
             if (i >= prev.length) return prev;
@@ -726,6 +779,7 @@ export function App() {
             error: err instanceof Error ? err.message : String(err),
           };
           results[i] = errorResult;
+          if (generation !== workspaceGenerationRef.current) return;
           completed++;
           setRepos((prev) => {
             if (i >= prev.length) return prev;
@@ -738,6 +792,7 @@ export function App() {
     );
 
     await Promise.allSettled(promises);
+    if (generation !== workspaceGenerationRef.current) return;
     setLastSync(new Date().toISOString());
     setIsSyncing(false);
 
@@ -751,12 +806,15 @@ export function App() {
         prs: prs,
       });
     } catch { /* non-fatal */ }
+    finally { if (syncRunRef.current === generation) syncRunRef.current = null; }
   }, [cfg, repoPaths, prs]);
 
   const syncOne = useCallback(async (repoPath: string, fetchMode: 'all' | 'origin' = 'all') => {
     if (!cfg) return;
+    const generation = workspaceGenerationRef.current;
     try {
       const result = await window.api.syncOneRepo(repoPath, cfg.base, cfg.release, fetchMode);
+      if (generation !== workspaceGenerationRef.current) return;
       setRepos((prev) => prev.map((r) => r.path === repoPath ? result : r));
       const now = new Date().toISOString();
       setLastSync(now);
@@ -770,6 +828,7 @@ export function App() {
         prs: prs,
       });
     } catch (err) {
+      if (generation !== workspaceGenerationRef.current) return;
       setStatusMessage('Sync failed for ' + repoPath.split('/').pop());
     }
   }, [cfg, repos, prs]);
@@ -794,15 +853,12 @@ export function App() {
     };
   }, []);
 
-  // ─── Initial Sync on Startup ────────────────────────────────────────────
-
-  const initialSyncDoneRef = useRef(false);
-
+  // Sync only when a workspace has no compatible complete cache.
   useEffect(() => {
-    if (!cfg || repoPaths.length === 0 || initialSyncDoneRef.current) return;
-    initialSyncDoneRef.current = true;
-    syncAll();
-  }, [cfg, repoPaths, syncAll]);
+    if (pendingInitialSync === null || pendingInitialSync !== workspaceGenerationRef.current || !cfg || repoPaths.length === 0) return;
+    setPendingInitialSync(null);
+    void syncAll();
+  }, [pendingInitialSync, cfg, repoPaths, syncAll]);
 
   // ─── Auto-sync ───────────────────────────────────────────────────────────
 
@@ -816,6 +872,7 @@ export function App() {
 
   const fetchPRsForRepo = useCallback(async (repoPath: string, filterOverride?: 'open' | 'closed' | 'all') => {
     if (!cfg) return;
+    const generation = workspaceGenerationRef.current;
     const filter = filterOverride ?? prFilter;
     setPRLoading(true);
     setPRError('');
@@ -844,10 +901,12 @@ export function App() {
         return;
       }
       const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, cfg.token, undefined, filter, 1, PR_PAGE_SIZE);
+      if (generation !== workspaceGenerationRef.current) return;
       result.prs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setPRPagination({ [repoPath]: { page: result.page, hasMore: result.hasMore } });
       setPRs(result.prs);
     } catch (err) {
+      if (generation !== workspaceGenerationRef.current) return;
       const raw = err instanceof Error ? err.message : String(err);
       if (raw.includes('401')) {
         setPRError('Authentication failed. Your API token may be invalid or expired. Press e to update it.');
@@ -905,6 +964,7 @@ export function App() {
   }, [cfg]);
 
   const fetchAllPRs = useCallback(async (filterOverride?: 'open' | 'closed' | 'all', reposOverride?: RepoState[]) => {
+    const generation = workspaceGenerationRef.current;
     const currentCfg = cfgRef.current;
     const currentRepos = reposOverride ?? reposRef.current;
     if (!currentCfg || currentRepos.length === 0) return;
@@ -931,6 +991,7 @@ export function App() {
         }
         if (!provider) return;
         const result = await window.api.fetchPRs(remoteInfo.owner, remoteInfo.repo, provider, currentCfg.token, repo.name, filter, 1, PR_PAGE_SIZE);
+        if (generation !== workspaceGenerationRef.current) return;
         setPRPagination((prev) => ({ ...prev, [repo.path]: { page: result.page, hasMore: result.hasMore } }));
         if (result.prs.length > 0) {
           loadedCount++;
@@ -966,6 +1027,7 @@ export function App() {
     );
 
     await Promise.allSettled(promises);
+    if (generation !== workspaceGenerationRef.current) return;
 
     // Only show error if NO PRs loaded at all — partial results keep PR list visible
     if (errors.length > 0 && loadedCount === 0) {
@@ -2088,6 +2150,8 @@ export function App() {
   selectWorkspaceRef.current = selectWorkspace;
   const cfgRef = useRef(cfg);
   cfgRef.current = cfg;
+  const cycleBranchPairRef = useRef(cycleBranchPair);
+  cycleBranchPairRef.current = cycleBranchPair;
   const reposRef = useRef(repos);
   reposRef.current = repos;
   const handleForceFetchComplete = useCallback(async (updatedRepo: RepoState): Promise<{ openPRCount: number | string | null; error?: string }> => {
@@ -2191,7 +2255,9 @@ export function App() {
       }
       // Never hijack keys while typing in an input/select (tab rename, watch interval, …)
       const evtTarget = e.target as HTMLElement | null;
-      if (evtTarget && (evtTarget.tagName === 'INPUT' || evtTarget.tagName === 'TEXTAREA' || evtTarget.tagName === 'SELECT')) return;
+      const focusedBranchSelector = evtTarget?.tagName === 'SELECT' && evtTarget.getAttribute('aria-label') === 'Branch comparison';
+      if (evtTarget && (evtTarget.tagName === 'INPUT' || evtTarget.tagName === 'TEXTAREA' || (evtTarget.tagName === 'SELECT' && !focusedBranchSelector) || evtTarget.isContentEditable)) return;
+      if (focusedBranchSelector && e.key !== 'x') return;
       if (showConfig) return;
       if (showCloneDialog) return;
       if (showAddWorkspace) return;
@@ -2208,6 +2274,14 @@ export function App() {
       }
       if (kubeBulkConfirm) {
         if (e.key === 'Escape') { e.preventDefault(); setKubeBulkConfirm(null); }
+        return;
+      }
+
+      // Cycle saved branch comparisons without intercepting typing or modified shortcuts.
+      if (e.key === 'x' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.repeat
+        && ['home', 'list', 'commits', 'detail', 'prs', 'prdetail', 'review'].includes(view)) {
+        e.preventDefault();
+        cycleBranchPairRef.current();
         return;
       }
 
@@ -2737,7 +2811,7 @@ export function App() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, reviewContext, kubeContexts, kubeContextTabs, kubeWorkloadTabs, kubeActiveTab, kubeConfirm, kubeBulkConfirm, selectKubeDeployment]);
+  }, [view, repos, selectedRepo, selectedCommit, prs, selectedPR, prDetail, cfg, inputMode, showConfig, showCloneDialog, showAddWorkspace, editWorkspace, workspaces, activeWorkspaceId, reviewContext, kubeContexts, kubeContextTabs, kubeWorkloadTabs, kubeActiveTab, kubeDescription, kubeConfirm, kubeBulkConfirm, selectKubeDeployment]);
 
   // ─── Filtered Repos ──────────────────────────────────────────────────────
 
@@ -2752,6 +2826,7 @@ export function App() {
     if (activeWorkspaceId) {
       const { theme: _unused, ...wsConfig } = newConfig;
       await window.api.saveWorkspaceConfig(activeWorkspaceId, wsConfig as AppConfig);
+      setWorkspaces(await window.api.loadWorkspaces());
     }
     // Always save theme to global config
     await window.api.saveConfig(newConfig);
@@ -2911,12 +2986,19 @@ export function App() {
             onSave={handleConfigSave}
             onClose={() => setView('list')}
             onBrowseWorkspace={browseWorkspace}
+            onCreateWorkspace={selectWorkspace}
+            onDuplicateWorkspace={handleDuplicateWorkspace}
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onEditWorkspace={setEditWorkspace}
+            onDeleteWorkspace={handleDeleteWorkspace}
           />
         );
       case 'list':
         return (
           <>
           <RepoList
+            onSwitchBranchPair={cycleBranchPair}
             repos={filteredRepos}
             selected={repos[selectedRepo]?.path ?? ''}
             onSelect={(repo) => setSelectedRepo(repos.findIndex((item) => item.path === repo.path))}
@@ -3300,6 +3382,7 @@ export function App() {
         return (
           <MappingView
             key={activeWorkspaceId ?? workspacePath}
+            workspaceId={activeWorkspaceId ?? workspacePath}
             repos={repos.filter((repo) => !(cfg.ignoredRepos ?? []).includes(repo.path))}
             baseBranch={cfg.base}
             releaseBranch={cfg.release}
@@ -3418,6 +3501,9 @@ export function App() {
             workspacePath={workspacePath}
             base={cfg.base}
             release={cfg.release}
+            branchPairs={cfg.branchPairs?.length ? cfg.branchPairs : [{ id: 'default', base: cfg.base, release: cfg.release, releaseStartDate: cfg.releaseStartDate }]}
+            activeBranchPairId={cfg.activeBranchPairId ?? cfg.branchPairs?.[0]?.id ?? 'default'}
+            onSwitchBranchPair={handleSwitchBranchPair}
             repoCount={repos.length}
             isSyncing={isSyncing}
             syncProgress={syncProgress}
@@ -3532,6 +3618,12 @@ export function App() {
           onSave={handleConfigSave}
           onClose={() => setShowConfig(false)}
           onBrowseWorkspace={browseWorkspace}
+          onCreateWorkspace={selectWorkspace}
+          onDuplicateWorkspace={handleDuplicateWorkspace}
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          onEditWorkspace={setEditWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
         />
       )}
 
@@ -3596,7 +3688,8 @@ export function App() {
       {showAddWorkspace && (
         <AddWorkspaceDialog
           onSave={handleAddWorkspaceSave}
-          onClose={() => setShowAddWorkspace(false)}
+          duplicateWorkspace={duplicateWorkspace ?? undefined}
+          onClose={() => { setShowAddWorkspace(false); setDuplicateWorkspace(null); }}
           onBrowse={browseWorkspace}
           defaultBase={cfg?.base ?? 'main'}
           defaultRelease={cfg?.release ?? 'R10'}

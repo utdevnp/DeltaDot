@@ -29,6 +29,7 @@ import { fetchJiraIssue, extractJiraIssueKey } from '../core/services/tasks/jira
 import { fetchAIReview, streamAIReview } from '../core/services/ai/review.js';
 import { getKubeContexts, getKubeNamespaces, getKubeDeployments, getKubeDeploymentDetail, getKubeDeploymentPods, getKubePodLogs, streamKubePodLogs, getKubeResources, restartKubeDeployment, restartAllKubeDeployments, deleteKubeJob, deleteKubeResource, describeKubeResource } from '../core/k8s.js';
 import { loadKubeContextSettings, saveKubeContextSettings } from '../core/kube-context-settings.js';
+import { database, initializeDatabase } from '../core/sqlite-storage.js';
 import type { AppConfig, RepoState, CacheFile, Provider, ThemeMode, Workspace, KubeResourceKind, KubeContextSettings, ForceFetchPreflight } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -201,14 +202,30 @@ ipcMain.handle('find-repos', async (_event, workspace: string) => {
   return findGitRepos(workspace);
 });
 
-ipcMain.handle('load-cache', async (_event, workspace: string) => {
-  currentCache = await loadCache(workspace);
+ipcMain.handle('load-cache', async (_event, workspace: string, base?: string, release?: string) => {
+  currentCache = await loadCache(workspace, base, release);
   return currentCache;
 });
 
 ipcMain.handle('save-cache', async (_event, cache: CacheFile) => {
   currentCache = cache;
   await saveCache(cache);
+});
+
+ipcMain.handle('load-current-mapping-report', async (_event, workspaceId: string) => {
+  return database().loadCurrentReport<unknown>(workspaceId);
+});
+
+ipcMain.handle('save-current-mapping-report', async (_event, workspaceId: string, report: unknown | null) => {
+  database().saveCurrentReport(workspaceId, report);
+});
+
+ipcMain.handle('load-mapping-column-prefs', async (_event, legacy?: Record<string, string[]>) => {
+  return database().loadMappingColumnPrefs(legacy);
+});
+
+ipcMain.handle('save-mapping-column-prefs', async (_event, preferences: Record<string, string[]>) => {
+  database().saveMappingColumnPrefs(preferences);
 });
 
 ipcMain.handle('load-config', async () => {
@@ -517,9 +534,12 @@ ipcMain.handle('add-workspace', async (_event, workspace: Workspace) => {
 });
 
 ipcMain.handle('remove-workspace', async (_event, id: string) => {
-  let workspaces = await loadWorkspaces();
-  workspaces = workspaces.filter((w) => w.id !== id);
-  await saveWorkspaces(workspaces);
+  const workspaces = database().removeWorkspace(id);
+  if (workspaces.length === 0) {
+    if (currentConfig) currentConfig = { ...currentConfig, workspace: '' };
+    currentRepos = [];
+    currentCache = null;
+  }
   return workspaces;
 });
 
@@ -548,6 +568,7 @@ ipcMain.handle('save-workspace-config', async (_event, id: string, config: AppCo
   const idx = workspaces.findIndex((w) => w.id === id);
   if (idx !== -1) {
     workspaces[idx]!.config = config;
+    workspaces[idx]!.path = config.workspace;
     await saveWorkspaces(workspaces);
   }
   currentConfig = config;
@@ -580,6 +601,14 @@ ipcMain.handle('get-commit-url', async (_event, remoteUrl: string, hash: string)
 // ─── App Lifecycle ──────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  try {
+    initializeDatabase();
+  } catch (error) {
+    console.error('[DeltaDot] Failed to initialize SQLite storage.', error);
+    dialog.showErrorBox('DeltaDot storage error', error instanceof Error ? error.message : String(error));
+    app.quit();
+    return;
+  }
   createWindow();
 
   app.on('activate', () => {
